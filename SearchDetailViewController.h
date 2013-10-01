@@ -7,19 +7,14 @@
 //
 
 #import <UIKit/UIKit.h>
+#import <MessageUI/MessageUI.h>
+#import <AddressBook/AddressBook.h>
+#import <AddressBookUI/AddressBookUI.h>
 #import "ClubInfo.h"
-#import "SDSegmentedControl.h"
-
-// enum for selection type
-typedef enum _DisplaySelected
-{
-    kDisplayDetails = 0,
-    kDisplayHours,
-    kDisplayClasses
-} DisplaySelected;
 
 
-@interface SearchDetailViewController : UIViewController <UITableViewDataSource, UITableViewDelegate, UIAlertViewDelegate>
+@interface SearchDetailViewController : UIViewController
+<UITableViewDataSource, UITableViewDelegate, UIAlertViewDelegate, MFMailComposeViewControllerDelegate>
 
 @property (nonatomic, strong) ClubInfo *clubInfo;
 @property (nonatomic, strong) NSArray *listArray;
@@ -33,15 +28,16 @@ typedef enum _DisplaySelected
 @property (nonatomic, assign) NSInteger sortType;
 @property (nonatomic, readwrite) BOOL isFavoriteClub;
 
-
 // UI
 
-@property (weak, nonatomic) IBOutlet UISegmentedControl *segmentedControl;
+@property (weak, nonatomic) IBOutlet UIView *containerView;
+@property (weak, nonatomic) IBOutlet UIView *sortButtonsContainer;
 @property (weak, nonatomic) IBOutlet UITableView *listTable;
 @property (weak, nonatomic) IBOutlet UILabel *headerLabel;
-
-
-- (IBAction)showSelectedView:(id)sender;
+@property (weak, nonatomic) IBOutlet UILabel *messageLabel;
+@property (weak, nonatomic) IBOutlet UILabel *sortByClassLabel;
+@property (weak, nonatomic) IBOutlet UILabel *sortByTimeLabel;
+@property (weak, nonatomic) IBOutlet UITabBar *tabBar;
 
 - (NSString*)amenitiesStr;
 - (NSString*)leaguesStr;
@@ -50,5 +46,7 @@ typedef enum _DisplaySelected
 - (NSString*)formatKidsKlubHours:(NSInteger)index;
 - (void)callClub;
 - (void)loadClassesBySort;
+
+- (IBAction)sortByAction:(id)sender;
 
 @end
