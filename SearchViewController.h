@@ -3,7 +3,7 @@
 //  LA Fitness
 //
 //  Created by Gina Mullins on 8/6/13.
-//  Copyright (c) 2013 Fitness International. All rights reserved.
+//  Copyright (c) 2013 xxxxxxxxxxx. All rights reserved.
 //
 
 #import <UIKit/UIKit.h>
@@ -31,15 +31,14 @@
 
 // UI
 
-@property (weak, nonatomic) IBOutlet UIView *containerView;
 @property (weak, nonatomic) IBOutlet UITableView *listTable;
 @property (weak, nonatomic) IBOutlet UITextField *locationTextField;
+@property (weak, nonatomic) IBOutlet UIButton *gpsButton;
 @property (weak, nonatomic) IBOutlet UIButton *mapButton;
 @property (weak, nonatomic) IBOutlet UITabBar *tabBar;
 @property (strong, nonatomic) UITableView *autoCompleteTable;
 
 
-- (IBAction)goBack:(id)sender;
 - (IBAction)mapAction:(id)sender;
 - (IBAction)GPSAction:(id)sender;
 - (IBAction)showAutoCompleteTable:(id)sender;
@@ -52,4 +51,3 @@
 
 
 @end
-
