@@ -3,7 +3,7 @@
 //  LA Fitness
 //
 //  Created by Gina Mullins on 8/6/13.
-//  Copyright (c) 2013 Fitness International. All rights reserved.
+//  Copyright (c) 2013 xxxxxxxxxx. All rights reserved.
 //
 
 #import <UIKit/UIKit.h>
@@ -14,7 +14,7 @@
 
 
 @interface SearchDetailViewController : UIViewController
-<UITableViewDataSource, UITableViewDelegate, UIAlertViewDelegate, MFMailComposeViewControllerDelegate>
+<UITableViewDataSource, UITableViewDelegate, UIAlertViewDelegate, MFMailComposeViewControllerDelegate, ABNewPersonViewControllerDelegate>
 
 @property (nonatomic, strong) ClubInfo *clubInfo;
 @property (nonatomic, strong) NSArray *listArray;
@@ -30,7 +30,6 @@
 
 // UI
 
-@property (weak, nonatomic) IBOutlet UIView *containerView;
 @property (weak, nonatomic) IBOutlet UIView *sortButtonsContainer;
 @property (weak, nonatomic) IBOutlet UITableView *listTable;
 @property (weak, nonatomic) IBOutlet UILabel *headerLabel;
