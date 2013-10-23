@@ -24,6 +24,7 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
 @interface SearchViewController ()
 
 @property (nonatomic, strong) PostalInfo *currentPostInfo;
+@property (nonatomic, readwrite) BOOL hasLeagues;
 
 @end
 
@@ -76,6 +77,22 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
     [refreshControl setTintColor:[UIColor redColor]];
     [refreshControl addTarget:self action:@selector(refresh:) forControlEvents:UIControlEventValueChanged];
     [self.listTable addSubview:refreshControl];
+    
+    // setup the GPS button to change the background color
+    [self.gpsButton addTarget:self action:@selector(buttonHighlight:) forControlEvents:UIControlEventTouchDown];
+    [self.gpsButton addTarget:self action:@selector(buttonNormal:) forControlEvents:UIControlEventTouchUpInside];
+    
+    
+}
+
+- (IBAction)buttonHighlight:(id)sender
+{
+    [self.gpsButton setBackgroundColor:[UIColor colorWithRed:.87 green:.87 blue:.87 alpha:1.0]];
+}
+
+- (IBAction)buttonNormal:(id)sender
+{
+    [self.gpsButton setBackgroundColor:[UIColor clearColor]];
 }
 
 -(void)refresh:(UIRefreshControl*)refreshControl
@@ -90,22 +107,17 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
     [super viewWillAppear:animated];
     
     // add UI changes
+    
+    if ([self.locationTextField.text length] == 0)
+        [self.locationTextField performSelector:@selector(resignFirstResponder) withObject:nil afterDelay:0.01];
+    
     UIBarButtonItem *rightButton = [[UIBarButtonItem alloc] initWithTitle:@"Map"
                                                                     style:UIBarButtonItemStylePlain
                                                                    target:self action:@selector(mapAction:)];
+    
     [[self navigationItem] setRightBarButtonItem:rightButton];
     
     [self.tabBar setSelectedItem:[self.tabBar.items objectAtIndex:self.tabIndex]];
-    
-    // reposition the container view
-    if ([[Utils sharedInstance] isIPhone5])
-    {
-        self.containerView.frame = CGRectMake(0, 455, 320, 50);
-    }
-    else
-    {
-        self.containerView.frame = CGRectMake(0, 366, 320, 50);
-    }
     
     // setup current location
     [[Location sharedInstance] gpsUpdateLocation];
@@ -113,12 +125,6 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
     [self loadListTable:self.tabIndex];
     [self createDataForAutoComplete];
     self.mapButton.hidden = NO;
-}
-
-- (void)didReceiveMemoryWarning
-{
-    [super didReceiveMemoryWarning];
-    // Dispose of any resources that can be recreated.
 }
 
 // load table cells faster and more efficiently
@@ -139,7 +145,7 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
     // create table if first time here
     if (self.autoCompleteTable == nil)
     {
-        self.autoCompleteTable = [[UITableView alloc] initWithFrame:CGRectMake(85, 95, 235, 120) style:UITableViewStylePlain];
+        self.autoCompleteTable = [[UITableView alloc] initWithFrame:CGRectMake(92, 39, 218, 120) style:UITableViewStylePlain];
         self.autoCompleteTable.delegate = self;
         self.autoCompleteTable.dataSource = self;
         self.autoCompleteTable.scrollEnabled = YES;
@@ -156,55 +162,43 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
     if ([self.locationTextField.text length] == 0)
     {
         // simple search by current location - need to load clubs for allIDs
-        self.searchLat = [[[NSUserDefaults standardUserDefaults] objectForKey:@"currentLat"] floatValue];
-        self.searchLon = [[[NSUserDefaults standardUserDefaults] objectForKey:@"currentLon"] floatValue];
-        self.listArray = [NSMutableArray arrayWithArray:[self.database filteredClubs]];
+        [self loadForCurrentLocation];
         [self loadOthers:selected];
     }
     else
     {
-        if ([self isNumeric:self.locationTextField.text])
-        {
-            [[Utils sharedInstance] showWithStatus:@"Searching..."];
-            [self.location retrieveCoords:self.locationTextField.text withCompletionBLock:^(BOOL completed) {
-                
-                if (completed)
-                {
-                    [[Utils sharedInstance] dismissStatus];
-                    self.searchLat = self.location.searchLat;
-                    self.searchLon = self.location.searchLon;
-                    
-                    // need to look for clubs regardless to create allID's array
-                    self.listArray = [NSMutableArray arrayWithArray:[self.database filteredClubsByLat:self.searchLat andLon:self.searchLon]];
-                }
-                else
-                {
-                    // no location found for zip
-                    NSLog(@"no location found for %@", self.locationTextField.text);
-                    self.listArray = [NSMutableArray arrayWithArray:[self.database filteredClubs]];
-                    self.locationTextField.text = @"";
-                }
-                
-                [self loadOthers:selected];
-                if ([self.listArray count])
-                {
-                    [self.listTable reloadData];  // need this inside the block
-                }
-                
-            }];
+        [[Utils sharedInstance] showWithStatus:@""];
+        [self.location retrieveCoords:self.locationTextField.text withCompletionBLock:^(BOOL completed) {
             
-            // need to reload again - block doesn't always execute
-            self.listArray = [NSMutableArray arrayWithArray:[self.database filteredClubsByLat:self.searchLat andLon:self.searchLon]];
+            if (completed)
+            {
+                [[Utils sharedInstance] dismissStatus];
+                self.searchLat = self.location.searchLat;
+                self.searchLon = self.location.searchLon;
+                
+                // need to look for clubs regardless to create allID's array
+                self.listArray = [NSMutableArray arrayWithArray:[self.database filteredClubsByLat:self.searchLat andLon:self.searchLon]];
+                if ([self.listArray count] == 0)
+                {
+                    // no clubs for that zip code
+                    [self loadForCurrentLocation];
+                    [self showAlert:1];
+                }
+            }
+            else
+            {
+                // returned an error
+                [self loadForCurrentLocation];
+                self.locationTextField.text = @"";
+            }
+            
             [self loadOthers:selected];
-        }
-        else
-        {
-            // searching by city
-            self.searchLat = self.currentPostInfo.latitude;
-            self.searchLon = self.currentPostInfo.longitude;
-            self.listArray = [NSMutableArray arrayWithArray:[self.database filteredClubsByLat:self.searchLat andLon:self.searchLon]];
-            [self loadOthers:selected];
-        }
+            if ([self.listArray count])
+            {
+                [self.listTable reloadData];  // need this inside the block
+            }
+            
+        }];
     }
     
     [self.listTable reloadData];
@@ -239,10 +233,22 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
             
             if ([self.listArray count] == 0)
             {
+                [self.listTable reloadData];
+                self.hasLeagues = NO;
                 [self showAlert:0];
             }
+            else
+                self.hasLeagues = YES;
+
             break;
     }
+}
+
+- (void)loadForCurrentLocation
+{
+    self.searchLat = [[[NSUserDefaults standardUserDefaults] objectForKey:@"currentLat"] floatValue];
+    self.searchLon = [[[NSUserDefaults standardUserDefaults] objectForKey:@"currentLon"] floatValue];
+    self.listArray = [NSMutableArray arrayWithArray:[self.database filteredClubs]];
 }
 
 - (NSInteger)sportNameIndexForLeague:(NSString*)sport
@@ -270,31 +276,43 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
 
 - (void)showAlert:(NSInteger)tag
 {
-    // for now
+    NSString *message = @"";
+    
+    if (tag == 0)
+    {
+        message = @"No leagues found within 50 miles.\nCheck your spelling or change\nyour search location above";
+    }
+    else if (tag == 1)
+    {
+        message = @"No Clubs Found for Search";
+        self.locationTextField.text = @"";
+    }
+    
     UIAlertView *alert = [[UIAlertView alloc]
-                          initWithTitle:@"No leagues found within 50 miles,\ncheck your spelling or change\nyour search location above"
+                          initWithTitle:message
                           message:nil
                           delegate:self
                           cancelButtonTitle:@"Continue"
                           otherButtonTitles:nil, nil];
     
-    [alert setTag:tag];
     [alert show];
-}
-
-- (IBAction)goBack:(id)sender
-{
-    [self.navigationController popViewControllerAnimated:YES];
 }
 
 - (IBAction)mapAction:(id)sender
 {
+    // show club location
+    CATransition* transition = [CATransition animation];
+    transition.duration = 0.6;
+    transition.type = kCATransitionReveal;
+    transition.subtype = kCATransitionFromBottom;
+    [self.navigationController.view.layer addAnimation:transition forKey:kCATransition];
+    
     MapViewController *mapView = [[MapViewController alloc] initWithNibName:@"MapViewController" bundle:nil];
     mapView.allLocations = [[NSArray alloc] initWithArray:[self.database filteredClubsByLat:self.searchLat andLon:self.searchLon]];
     mapView.searchLat = self.searchLat;
     mapView.searchLon = self.searchLon;
-    mapView.modalTransitionStyle = UIModalTransitionStyleFlipHorizontal;
-    [self.navigationController presentViewController:mapView animated:YES completion:nil];
+    
+    [self.navigationController pushViewController:mapView animated:NO];
 }
 
 - (IBAction)GPSAction:(id)sender
@@ -311,7 +329,7 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
     if ([textField.text length] == 0)
     {
         // in case the user backspaces all the way back
-        [self.locationTextField performSelector:@selector(resignFirstResponder) withObject:nil afterDelay:0.1];
+        [self.locationTextField performSelector:@selector(resignFirstResponder) withObject:nil afterDelay:0.01];
     }
     else
     {
@@ -344,7 +362,7 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
             if ([self.autoCompleteArray count] > 0 && [self.autoCompleteArray count] < 10)
             {
                 float height = ((20 * [self.autoCompleteArray count]) + 10);
-                self.autoCompleteTable.frame = CGRectMake(85, 95, 235, height);
+                self.autoCompleteTable.frame = CGRectMake(92, 39, 218, height);
             }
             
             if ([self.autoCompleteArray count] > 0)
@@ -362,7 +380,7 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
 {
     // reset the table
     self.autoCompleteTable.hidden = YES;
-    self.autoCompleteTable.frame = CGRectMake(85, 95, 235, 120);
+    self.autoCompleteTable.frame = CGRectMake(92, 39, 218, 120);
 }
 
 - (BOOL)isNumeric:(NSString*)substring
@@ -375,40 +393,29 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
 
 - (void)textFieldDidBeginEditing:(UITextField *)textField
 {
-    self.autoCompleteTable.frame = CGRectMake(85, 95, 235, 120);
+    self.autoCompleteTable.frame = CGRectMake(92, 39, 218, 120);
 }
 
 - (BOOL)textFieldShouldReturn:(UITextField *)textField
 {
     // dismiss the keyboard - need delay to make it work here
-    [self.locationTextField performSelector:@selector(resignFirstResponder) withObject:nil afterDelay:0.1];
+    [self.locationTextField performSelector:@selector(resignFirstResponder) withObject:nil afterDelay:0.01];
     [self.locationTextField setClearButtonMode:UITextFieldViewModeAlways];
-
-    if ([self isNumeric:self.locationTextField.text])
+    
+    if (self.tabIndex == 3 && self.hasLeagues == NO)
     {
-        // locations come from zip codes
-        [self loadListTable:self.tabIndex];
+        [self showAlert:0];
+        self.locationTextField.text = @"";
+        return YES;
     }
-    else
+
+    // make sure we have something before reloading
+    if ([self.locationTextField.text length] > 0)
     {
-        // make sure we have something before reloading
-        if ([self.locationTextField.text length] > 0 && [self.autoCompleteArray count] > 0)
-        {
-            [self loadListTable:self.tabIndex];
+        [self loadListTable:self.tabIndex];
+        
+        if ([self.autoCompleteArray count] > 0)
             [self resetAutoCompleteTable];
-        }
-        else
-        {
-            UIAlertView *alert = [[UIAlertView alloc]
-                                  initWithTitle:@"No Clubs Found for Search"
-                                  message:nil
-                                  delegate:self
-                                  cancelButtonTitle:@"OK"
-                                  otherButtonTitles:nil, nil];
-            
-            [alert show];
-            self.locationTextField.text = @"";
-        }
     }
     
     return YES;
@@ -417,7 +424,7 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
 - (BOOL)textFieldShouldClear:(UITextField *)textField
 {
     // dismiss the keyboard - need delay to make it work here
-    [self.locationTextField performSelector:@selector(resignFirstResponder) withObject:nil afterDelay:0.1];
+    [self.locationTextField performSelector:@selector(resignFirstResponder) withObject:nil afterDelay:0.01];
     
     // reset the searchBox
     if ([self.locationTextField.text length] > 0)
@@ -484,7 +491,7 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
         NSInteger index = [[info valueForKey:@"index"] integerValue];
         self.currentPostInfo = [self.allCities objectAtIndex:index];
         [cell.textLabel setText:[NSString stringWithFormat:@"%@, %@", self.currentPostInfo.city, self.currentPostInfo.state]];
-        [cell.textLabel setFont:[UIFont fontWithName:@"American Typewriter" size:13]];
+        [cell.textLabel setFont:[UIFont systemFontOfSize:13]];
         return cell;
     }
 }
@@ -495,6 +502,7 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
     {
         if (self.listSelected == kClubs)
         {
+            NSLog(@"1listArray count:%i", [self.listArray count]);
             ClubInfo *info = [self.listArray objectAtIndex:indexPath.row];
             SearchDetailViewController *detailView = [[SearchDetailViewController alloc] initWithNibName:@"SearchDetailViewController" bundle:nil];
             detailView.clubInfo = info;
@@ -547,14 +555,6 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
 {
     if (tableView == self.listTable)
     {
-        if (self.listSelected == kClasses)
-        {
-            NSDictionary *info = [self.listArray objectAtIndex:indexPath.row];
-            CGSize size = [[Utils sharedInstance] stringSizeForLabelCell:[info valueForKey:@"desc"]];
-            
-            return size.height + 55;
-        }
-        
         return 50;
     }
     else
@@ -591,12 +591,12 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
     [cell.title setTextColor:[UIColor blackColor]];
     [cell.title setFrame:CGRectMake(7, 2, 250, 21)];
     
-    [cell.subtitle setFont:[UIFont fontWithName:@"American Typewriter" size:SearchCell_Subtitle_FontSize]];
+    [cell.subtitle setFont:[UIFont systemFontOfSize:SearchCell_Subtitle_FontSize]];
     [cell.subtitle setTextColor:[UIColor darkGrayColor]];
     [cell.subtitle setFrame:CGRectMake(7, 23, 200, 21)];
     
     [cell.miscLabel setFont:[UIFont systemFontOfSize:SearchCell_Misc_FontSize]];
-    [cell.miscLabel setTextColor:[UIColor blueColor]];
+    [cell.miscLabel setTextColor:[UIColor blackColor]];
     
     if (self.listSelected == kClubs)
     {
@@ -605,6 +605,8 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
         cell.title.text = info.desc;
         cell.subtitle.text = info.city;
         cell.miscLabel.text = [NSString stringWithFormat:@"%i Mi", info.distance];
+        [cell.miscLabel setFrame:CGRectMake(240, 10, 50, 32)];
+        [cell.miscLabel setTextAlignment:NSTextAlignmentRight];
         cell.imageView.hidden = YES;
     }
     else if (self.listSelected == kClasses)
@@ -612,15 +614,12 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
         NSDictionary *info = [self.listArray objectAtIndex:indexPath.row];
         
         cell.title.text = [info valueForKey:@"name"];
-        cell.subtitle.text = [info valueForKey:@"desc"];
+        cell.subtitle.hidden = YES;
         cell.miscLabel.hidden = YES;
         cell.imageView.hidden = YES;
         
-        // resize the label to fit entire description
-        cell.subtitle.numberOfLines = 0;
-        CGSize size = [[Utils sharedInstance] stringSizeForLabelCell:cell.subtitle.text];
-        [cell.subtitle setFrame:CGRectMake(11, 23, 270, size.height+25)];
-        [cell.subtitle setFont:[UIFont fontWithName:@"American Typewriter" size:13]];   // must be the same as stringsize
+        [cell.title setFrame:CGRectMake(7, 10, 200, 25)];
+        
     }
     else if (self.listSelected == kAmenities)
     {
@@ -653,5 +652,16 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
     return REUSE_SEARCH_ID;
 }
 
+- (void)didReceiveMemoryWarning
+{
+    [super didReceiveMemoryWarning];
+    
+    self.database = nil;
+    self.location = nil;
+    self.listArray = nil;
+    self.allCities = nil;
+    self.autoCompleteArray = nil;
+    self.sectionHeader = nil;
+}
 
 @end
