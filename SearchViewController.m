@@ -3,7 +3,7 @@
 //  LA Fitness
 //
 //  Created by Gina Mullins on 8/6/13.
-//  Copyright (c) 2013 Fitness International. All rights reserved.
+//  Copyright (c) 2013 xxxxxxxxxx. All rights reserved.
 //
 
 #import "SearchViewController.h"
