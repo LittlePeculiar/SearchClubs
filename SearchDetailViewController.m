@@ -3,7 +3,7 @@
 //  LA Fitness
 //
 //  Created by Gina Mullins on 8/6/13.
-//  Copyright (c) 2013 Fitness International. All rights reserved.
+//  Copyright (c) 2013 xxxxxxxxxx. All rights reserved.
 //
 
 #import "SearchDetailViewController.h"
@@ -31,6 +31,10 @@ NSString * const REUSE_SHOW_LABEL_ID = @"ShowLabelCell";
 
 
 @interface SearchDetailViewController ()
+
+@property (nonatomic, assign) ABAddressBookRef addressBook;
+@property (nonatomic, assign) float listTableHeight;
+@property (nonatomic, assign) float listTableHeightForDetails;
 
 @end
 
@@ -72,7 +76,21 @@ NSString * const REUSE_SHOW_LABEL_ID = @"ShowLabelCell";
     
     self.sortType = kSortClassName;
     self.displayType = kClubDetails;
-    self.listTable.frame = CGRectMake(0, 0, 320, 454);
+    
+    if ([[Utils sharedInstance] isIPhone5])
+    {
+        self.listTableHeight = 364;
+        self.listTableHeightForDetails = 454;
+    }
+    else
+    {
+        self.listTableHeight = 290;
+        self.listTableHeightForDetails = 450;
+    }
+    
+    // first page loaded is always details
+    self.listTable.frame = CGRectMake(0, 0, 320, self.listTableHeightForDetails);
+    
     
 }
 
@@ -82,20 +100,11 @@ NSString * const REUSE_SHOW_LABEL_ID = @"ShowLabelCell";
     [super viewWillAppear:animated];
     
     self.headerLabel.text = self.headerText;
+    self.headerLabel.font = [UIFont systemFontOfSize:17];
     self.isFavoriteClub = NO;
     
     [self.tabBar setSelectedItem:[self.tabBar.items objectAtIndex:self.displayType]];
     [self.listTable reloadData];
-    
-    // reposition the container view
-    if ([[Utils sharedInstance] isIPhone5])
-    {
-        self.containerView.frame = CGRectMake(0, 455, 320, 50);
-    }
-    else
-    {
-        self.containerView.frame = CGRectMake(0, 366, 320, 50);
-    }
     
     // look for favorite Clubs and Classes
     NSFileManager *manager = [NSFileManager defaultManager];
@@ -141,12 +150,6 @@ NSString * const REUSE_SHOW_LABEL_ID = @"ShowLabelCell";
     {
         [dict writeToFile:self.favoritesPath atomically:YES];
     }
-}
-
-- (void)didReceiveMemoryWarning
-{
-    [super didReceiveMemoryWarning];
-    // Dispose of any resources that can be recreated.
 }
 
 - (NSString*)amenitiesStr
@@ -197,7 +200,7 @@ NSString * const REUSE_SHOW_LABEL_ID = @"ShowLabelCell";
     }
     else
     {
-        list = @"Leagues:\nNo leagues at blah location";
+        list = @"Leagues:\nNo leagues at this location";
     }
     
     return list;
@@ -321,17 +324,172 @@ NSString * const REUSE_SHOW_LABEL_ID = @"ShowLabelCell";
 
 - (void)sendEmail
 {
-     // Email Subject
-    NSString *clubType = [[GlobalMethods sharedGlobalMethods] getCurrentBrand];
-    NSString *subjectLine = [NSString stringWithFormat:@"%@ %@", clubType, self.clubInfo.desc];
+    if ([MFMailComposeViewController canSendMail])
+    {
+        MFMailComposeViewController *mailController = [[MFMailComposeViewController alloc] init];
+        mailController.mailComposeDelegate = self;
+        
+        NSString *clubType = [[GlobalMethods sharedGlobalMethods] getCurrentBrand];
+        NSString *body = [NSString stringWithFormat:@"%@\n%@\n%@\n%@, %@",
+                                 clubType, self.clubInfo.desc, self.clubInfo.address, self.clubInfo.city, self.clubInfo.state];
+        [mailController setSubject:@" "];
+        [mailController setMessageBody:body isHTML:NO];
     
-    MFMailComposeViewController *mc = [[MFMailComposeViewController alloc] init];
+        [self presentViewController:mailController animated:YES completion:nil];
+        [[mailController navigationBar] setTintColor:[UIColor whiteColor]];
+
+    }
+    else
+    {
+        UIAlertView* myAlert = [[UIAlertView alloc] initWithTitle:@"Unable to send email at this time"
+                                                          message:nil
+                                                         delegate:nil
+                                                cancelButtonTitle:@"OK"
+                                                otherButtonTitles:nil];
+        [myAlert show];
+    }
     
-    mc.mailComposeDelegate = self;
-    [mc setSubject:subjectLine];
+}
+
+// Dismiss email composer UI on cancel / send
+- (void)mailComposeController:(MFMailComposeViewController*)controller didFinishWithResult:(MFMailComposeResult)result error:(NSError*)error
+{
+    switch (result)
+    {
+        case MFMailComposeResultCancelled:
+            NSLog(@"Mail cancelled");
+            break;
+        case MFMailComposeResultSaved:
+            NSLog(@"Mail saved");
+            break;
+        case MFMailComposeResultSent:
+            NSLog(@"Mail sent");
+            break;
+        case MFMailComposeResultFailed:
+            NSLog(@"Mail sent failure: %@", [error localizedDescription]);
+            break;
+        default:
+            break;
+    }
     
-    // Present mail view controller on screen
-    [self presentViewController:mc animated:YES completion:NULL];
+    [self becomeFirstResponder];
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (IBAction)addToContacts:(id)sender
+{
+    // make sure we have access
+    switch (ABAddressBookGetAuthorizationStatus())
+    {
+        // we have access
+        case  kABAuthorizationStatusAuthorized:
+            [self accessGrantedForAddressBook];
+            break;
+            
+        // make a request
+        case  kABAuthorizationStatusNotDetermined :
+            [self requestAddressBookAccess];
+            break;
+        
+        // no access, let the user know
+        case  kABAuthorizationStatusDenied:
+        case  kABAuthorizationStatusRestricted:
+        {
+            UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Privacy Warning"
+                                                            message:@"Permission was not granted for Contacts."
+                                                           delegate:nil
+                                                  cancelButtonTitle:@"OK"
+                                                  otherButtonTitles:nil];
+            [alert show];
+        }
+        break;
+        
+        default:
+            break;
+    }
+}
+
+- (void)newPersonViewController:(ABNewPersonViewController *)newPersonView didCompleteWithNewPerson:(ABRecordRef)person
+{
+    [self.navigationController dismissViewControllerAnimated:YES completion:nil];
+}
+
+// Prompt the user for access to their Address Book data
+-(void)requestAddressBookAccess
+{
+    ABAddressBookRequestAccessWithCompletion(self.addressBook, ^(bool granted, CFErrorRef error)
+    {
+        if (granted)
+        {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self accessGrantedForAddressBook];
+                
+            });
+        }
+    });
+}
+
+// This method is called when the user has granted access to their address book data.
+-(void)accessGrantedForAddressBook
+{
+    CFErrorRef error = NULL;
+    self.addressBook = ABAddressBookCreateWithOptions(Nil, &error);
+    ABRecordRef person = ABPersonCreate();
+    
+    // add an image
+    NSData *dataRef = nil;
+    NSString *brandName = @"";
+    if ([[[GlobalMethods sharedGlobalMethods]getCurrentBrand] isEqualToString:@"CSC"])
+    {
+        //dataRef = UIImagePNGRepresentation([UIImage imageNamed:@"swishLogo.png"]);
+        brandName = @"City Sports Club";
+    }
+    else
+    {
+        dataRef = UIImagePNGRepresentation([UIImage imageNamed:@"lafSwoosh.png"]);
+        brandName = @"LA Fitness";
+    }
+    
+    ABPersonSetImageData(person, (__bridge CFDataRef)dataRef, nil);
+    
+    // club name and brand
+    ABRecordSetValue(person, kABPersonFirstNameProperty, (__bridge CFTypeRef)(self.clubInfo.desc), &error);
+    ABRecordSetValue(person, kABPersonOrganizationProperty, (__bridge CFTypeRef)(brandName), &error);
+    
+    // address
+    ABMutableMultiValueRef multiAddress = ABMultiValueCreateMutable(kABMultiDictionaryPropertyType);
+    NSMutableDictionary *addressDictionary = [[NSMutableDictionary alloc] init];
+    
+    [addressDictionary setObject:self.clubInfo.address forKey:(NSString *)kABPersonAddressStreetKey];
+    [addressDictionary setObject:self.clubInfo.city forKey:(NSString *)kABPersonAddressCityKey];
+    [addressDictionary setObject:self.clubInfo.state forKey:(NSString *)kABPersonAddressStateKey];
+    [addressDictionary setObject:[NSString stringWithFormat:@"%i", self.clubInfo.zip] forKey:(NSString *)kABPersonAddressZIPKey];
+    
+    ABMultiValueAddValueAndLabel(multiAddress, (__bridge CFTypeRef)(addressDictionary), (CFStringRef)@"Address", NULL);
+    ABRecordSetValue(person, kABPersonAddressProperty, multiAddress,&error);
+    CFRelease(multiAddress);
+    
+    // phone
+    ABMutableMultiValueRef multiPhone = ABMultiValueCreateMutable(kABMultiStringPropertyType);
+    ABMultiValueAddValueAndLabel(multiPhone, (__bridge CFTypeRef)(self.clubInfo.phone), kABPersonPhoneMobileLabel, NULL);
+    ABRecordSetValue(person, kABPersonPhoneProperty, multiPhone,nil);
+    CFRelease(multiPhone);
+    
+    ABAddressBookAddRecord(self.addressBook, person, &error);
+    
+    // show the new contact
+    ABNewPersonViewController *controller = [[ABNewPersonViewController alloc] init];
+    controller.newPersonViewDelegate = self;
+    [controller setTitle:@" "];     // using logo for title background
+    
+    controller.displayedPerson = person;
+    
+    UINavigationController *newNavigationController = [[UINavigationController alloc] initWithRootViewController:controller];
+    
+    [[newNavigationController navigationBar] setTintColor:[UIColor whiteColor]];
+    [self presentViewController:newNavigationController animated:YES completion:nil];
+    
+    CFRelease(person);
 }
 
 - (void)loadClassesBySort
@@ -390,50 +548,6 @@ NSString * const REUSE_SHOW_LABEL_ID = @"ShowLabelCell";
     [self.listTable reloadData];
 }
 
-- (IBAction)addToContacts:(id)sender
-{
-    CFErrorRef error = NULL;
-    ABAddressBookRef addressBook = ABAddressBookCreateWithOptions(Nil, &error);
-    ABRecordRef person = ABPersonCreate();
-    
-    // add an image
-    NSData *dataRef = UIImagePNGRepresentation([UIImage imageNamed:@"lafSwoosh.png"]);
-    ABPersonSetImageData(person, (__bridge CFDataRef)dataRef, nil);
-    
-    // club name and brand
-    ABRecordSetValue(person, kABPersonFirstNameProperty, (__bridge CFTypeRef)(self.clubInfo.desc), &error);
-    ABRecordSetValue(person, kABPersonOrganizationProperty, (__bridge CFTypeRef)([[GlobalMethods sharedGlobalMethods] getCurrentBrand]), &error);
-    
-    // address
-    ABMutableMultiValueRef multiAddress = ABMultiValueCreateMutable(kABMultiDictionaryPropertyType);
-    NSMutableDictionary *addressDictionary = [[NSMutableDictionary alloc] init];
-    
-    [addressDictionary setObject:self.clubInfo.city forKey:(NSString *)kABPersonAddressCityKey];
-    [addressDictionary setObject:self.clubInfo.state forKey:(NSString *)kABPersonAddressStateKey];
-    [addressDictionary setObject:[NSString stringWithFormat:@"%i", self.clubInfo.zip] forKey:(NSString *)kABPersonAddressZIPKey];
-    
-    ABMultiValueAddValueAndLabel(multiAddress, (__bridge CFTypeRef)(addressDictionary), (CFStringRef)@"Address", NULL);
-    ABRecordSetValue(person, kABPersonAddressProperty, multiAddress,&error);
-    CFRelease(multiAddress);
-    
-    // phone
-    ABMutableMultiValueRef multiPhone = ABMultiValueCreateMutable(kABMultiStringPropertyType);
-    ABMultiValueAddValueAndLabel(multiPhone, (__bridge CFTypeRef)(self.clubInfo.phone), kABPersonPhoneMobileLabel, NULL);
-    ABRecordSetValue(person, kABPersonPhoneProperty, multiPhone,nil);
-    CFRelease(multiPhone);
-
-    ABAddressBookAddRecord(addressBook, person, &error);
-    
-    // show the new contact
-    ABUnknownPersonViewController *controller = [[ABUnknownPersonViewController alloc] init];
-    
-    controller.displayedPerson = person;
-    controller.allowsAddingToAddressBook = YES;
-    [self.navigationController pushViewController:controller animated:YES];
-
-    CFRelease(person);
-    
-}
 
 // load table cells faster and more efficiently
 - (void)registerNibs
@@ -472,33 +586,6 @@ NSString * const REUSE_SHOW_LABEL_ID = @"ShowLabelCell";
     }
     
     [self loadClassesBySort];
-    
-}
-
-#pragma mark = MFMailCompose Delegate
-
-- (void)mailComposeController:(MFMailComposeViewController *)controller didFinishWithResult:(MFMailComposeResult)result error:(NSError *)error
-{
-    switch (result)
-    {
-        case MFMailComposeResultCancelled:
-            NSLog(@"Mail cancelled");
-            break;
-        case MFMailComposeResultSaved:
-            NSLog(@"Mail saved");
-            break;
-        case MFMailComposeResultSent:
-            NSLog(@"Mail sent");
-            break;
-        case MFMailComposeResultFailed:
-            NSLog(@"Mail sent failure: %@", [error localizedDescription]);
-            break;
-        default:
-            break;
-    }
-    
-    // Close the Mail Interface
-    [self dismissViewControllerAnimated:YES completion:NULL];
 }
 
 
@@ -508,13 +595,12 @@ NSString * const REUSE_SHOW_LABEL_ID = @"ShowLabelCell";
 - (void)tabBar:(UITabBar *)tabBar didSelectItem:(UITabBarItem *)item
 {
     self.displayType = [item tag];
-    self.listTable.frame = CGRectMake(0, 92, 320, 364);
-    self.view.backgroundColor = [UIColor lightGrayColor];
+    self.listTable.frame = CGRectMake(0, 90, 320, self.listTableHeight);
     
     switch (self.displayType)
     {
         case kClubDetails:
-            self.listTable.frame = CGRectMake(0, 0, 320, 454);
+            self.listTable.frame = CGRectMake(0, 0, 320, self.listTableHeightForDetails);
             break;
             
         case kClubHours:
@@ -527,7 +613,6 @@ NSString * const REUSE_SHOW_LABEL_ID = @"ShowLabelCell";
             self.messageLabel.text = @"Schedule subject to change";
             [self loadClassesBySort];
             self.sortButtonsContainer.hidden = NO;
-            self.view.backgroundColor = [UIColor whiteColor];
             break;
             
         default:
@@ -621,13 +706,14 @@ NSString * const REUSE_SHOW_LABEL_ID = @"ShowLabelCell";
     if (self.displayType == kClubDetails)
     {
         [cell setAccessoryType:UITableViewCellAccessoryDisclosureIndicator];
+    
         [cell.imageView setHidden:NO];
         
         if (indexPath.row == 1)
         {
             cell.title.text = self.clubInfo.address;
-            cell.subtitle.text = [NSString stringWithFormat:@"%@, %@", self.clubInfo.city, self.clubInfo.state];
-            [cell.imageView setImage:[UIImage imageNamed:@"magnify.png"]];
+            cell.subtitle.text = [NSString stringWithFormat:@"%@, %@ %i", self.clubInfo.city, self.clubInfo.state, self.clubInfo.zip];
+            [cell.imageView setImage:[UIImage imageNamed:@"LocatorIcon.png"]];
             [cell.title setFrame:CGRectMake(51, 4, 200, 20)];
             [cell.subtitle setFrame:CGRectMake(51, 28, 200, 20)];
         }
@@ -635,14 +721,14 @@ NSString * const REUSE_SHOW_LABEL_ID = @"ShowLabelCell";
         {
             cell.title.text = self.clubInfo.phone;
             cell.subtitle.hidden = YES;
-            [cell.imageView setImage:[UIImage imageNamed:@"phone.png"]];
+            [cell.imageView setImage:[UIImage imageNamed:@"PhoneIcon.png"]];
             [cell.title setFrame:CGRectMake(51, 15, 200, 20)];
         }
         if (indexPath.row == 3)
         {
             cell.title.text = @"Email Address Info";
             cell.subtitle.hidden = YES;
-            [cell.imageView setImage:[UIImage imageNamed:@"mailSend.png"]];
+            [cell.imageView setImage:[UIImage imageNamed:@"EmailScheduleIcon.png"]];
             [cell.title setFrame:CGRectMake(51, 15, 200, 20)];
         }
     }
@@ -660,14 +746,15 @@ NSString * const REUSE_SHOW_LABEL_ID = @"ShowLabelCell";
         if (indexPath.row == [FormatDate dayOfTheWeek])
         {
             // highlight this row
-            cell.contentView.backgroundColor = [UIColor colorWithRed:.78 green:.88 blue:.99 alpha:.5];
+            cell.contentView.backgroundColor = [UIColor colorWithRed:.95 green:.54 blue:0 alpha:0.2];
         }
     }
     else if (self.displayType == kClubClasses)
     {
+        [cell setAccessoryType:UITableViewCellAccessoryDisclosureIndicator];
+        
         if (self.sortType == kSortClassName)
         {
-            [cell setAccessoryType:UITableViewCellAccessoryDisclosureIndicator];
             cell.subtitle.hidden = YES;
             NSDictionary *info = [self.listArray objectAtIndex:indexPath.row];
             
@@ -692,34 +779,57 @@ NSString * const REUSE_SHOW_LABEL_ID = @"ShowLabelCell";
 {
     [cell setSelectionStyle:UITableViewCellSelectionStyleNone];
     
-    [cell.cellButton1 setImage:[UIImage imageNamed:@"contact.png"] forState:UIControlStateNormal];
+    [cell.cellButton1 setImage:[UIImage imageNamed:@"AddPlusIcon.png"] forState:UIControlStateNormal];
     [cell.cellTitle1 setText:@"Add to Contacts"];
+    [cell.cellTitle1 setNumberOfLines:3];
+    [cell.cellTitle2 setNumberOfLines:3];
     [cell.cellButton1 addTarget:self
                          action:@selector(addToContacts:)
                forControlEvents:UIControlEventTouchUpInside];
     
-    [cell.cellButton2 addTarget:self
-                         action:@selector(addToFavorites:)
-               forControlEvents:UIControlEventTouchUpInside];
-    
-    if (self.isFavoriteClub)
+    BOOL isUserLoggedIn = [[GlobalMethods sharedGlobalMethods] isUserLoggedIn];
+    if (isUserLoggedIn)
     {
-        [cell.cellButton2 setImage:[UIImage imageNamed:@"favorite.png"] forState:UIControlStateNormal];
-        [cell.cellTitle2 setText:@"Remove Favorite"];
+        cell.cellButton2.hidden = NO;
+        cell.cellTitle2.hidden = NO;
+        
+        [cell.cellTitle1 setFrame:CGRectMake(42, 45, 100, 34)];
+        [cell.cellTitle2 setFrame:CGRectMake(172, 45, 120, 34)];
+        [cell.cellButton1 setFrame:CGRectMake(72, 7, 40, 40)];
+        [cell.cellButton2 setFrame:CGRectMake(212, 7, 40, 40)];
+        
+        [cell.cellButton2 addTarget:self
+                             action:@selector(addToFavorites:)
+                   forControlEvents:UIControlEventTouchUpInside];
+        
+        if (self.isFavoriteClub)
+        {
+            [cell.cellButton2 setImage:[UIImage imageNamed:@"favorite.png"] forState:UIControlStateNormal];
+            [cell.cellTitle2 setText:@"Remove Favorite"];
+        }
+        else
+        {
+            [cell.cellButton2 setImage:[UIImage imageNamed:@"AddFavoriteIcon.png"] forState:UIControlStateNormal];
+            [cell.cellTitle2 setText:@"Add Club to Favorites"];
+        }
     }
     else
     {
-        [cell.cellButton2 setImage:[UIImage imageNamed:@"favoriteAdd.png"] forState:UIControlStateNormal];
-        [cell.cellTitle2 setText:@"Add Club to Favorites"];
+        // only allow classDetails
+        cell.cellButton2.hidden = YES;
+        cell.cellTitle2.hidden = YES;
+        
+        [cell.cellTitle1 setFrame:CGRectMake(107, 45, 100, 34)];
+        [cell.cellButton1 setFrame:CGRectMake(136, 7, 40, 40)];
     }
 }
 
 - (void)configureLabelCell:(ShowLabelCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath
 {
     [cell setSelectionStyle:UITableViewCellSelectionStyleNone];
-    [cell.cellLabel setFont:[UIFont fontWithName:@"American Typewriter" size:13]];
+    [cell.cellLabel setFont:[UIFont systemFontOfSize:13]];
     [cell.cellLabel setNumberOfLines:10];
-    float labelWidth = 290;     // make it the same for everyone
+    float labelWidth = 260;     // make it the same for everyone
     
     if (self.displayType == kClubDetails)
     {
@@ -727,15 +837,17 @@ NSString * const REUSE_SHOW_LABEL_ID = @"ShowLabelCell";
         if (indexPath.row == 4)
         {
             listStr = [self amenitiesStr];
+            [cell.cellImageView setImage:[UIImage imageNamed:@"WaterBottleIcon.png"]];
         }
         if (indexPath.row == 5)
         {
             listStr = [self leaguesStr];
+            [cell.cellImageView setImage:[UIImage imageNamed:@"BasketballIcon.png"]];
         }
         cell.cellLabel.text = listStr;
         
         CGSize size = [[Utils sharedInstance] stringSizeForLabelCell:listStr];
-        [cell.cellLabel setFrame:CGRectMake(10, 5, labelWidth, size.height+10)];
+        [cell.cellLabel setFrame:CGRectMake(40, 5, labelWidth, size.height+30)];
         [cell.cellLabel setTextAlignment:NSTextAlignmentLeft];
     }
 }
@@ -747,13 +859,18 @@ NSString * const REUSE_SHOW_LABEL_ID = @"ShowLabelCell";
         if (indexPath.row == 1)
         {
             // show club location
+            CATransition* transition = [CATransition animation];
+            transition.duration = 0.5;
+            transition.type = kCATransitionReveal;
+            transition.subtype = kCATransitionFromRight;
+            [self.navigationController.view.layer addAnimation:transition forKey:kCATransition];
+            
             MapViewController *mapView = [[MapViewController alloc] initWithNibName:@"MapViewController" bundle:nil];
-            NSArray *loc = [[NSArray alloc] initWithObjects:self.clubInfo, nil];
-            mapView.allLocations = loc;
+            mapView.allLocations = [[NSArray alloc] initWithObjects:self.clubInfo, nil];
             mapView.searchLat = self.clubInfo.lat;
             mapView.searchLon = self.clubInfo.lon;
-            mapView.modalTransitionStyle = UIModalTransitionStyleFlipHorizontal;
-            [self.navigationController presentViewController:mapView animated:YES completion:nil];
+            
+            [self.navigationController pushViewController:mapView animated:NO];
         }
         else if (indexPath.row == 2)
         {
@@ -822,7 +939,7 @@ NSString * const REUSE_SHOW_LABEL_ID = @"ShowLabelCell";
             }
             CGSize size = [[Utils sharedInstance] stringSizeForLabelCell:listStr];
             
-            return size.height + 10;
+            return size.height + 30;
         }
     }
     else if (self.displayType == kClubHours)
@@ -877,6 +994,28 @@ NSString * const REUSE_SHOW_LABEL_ID = @"ShowLabelCell";
         NSString *phoneStr = [NSString stringWithFormat:@"telprompt://1-%@", self.clubInfo.phone];
         NSURL *url = [NSURL URLWithString:phoneStr];
         [[UIApplication sharedApplication] openURL:url];
+    }
+}
+
+
+- (void)didReceiveMemoryWarning
+{
+    [super didReceiveMemoryWarning];
+    
+    self.clubInfo = nil;
+    self.listArray = nil;
+    self.favoriteClubs = nil;
+    self.favoriteClasses = nil;
+    self.favoritesPath = nil;
+    self.headerText = nil;
+    self.sections = nil;
+}
+
+- (void)dealloc
+{
+    if(self.addressBook)
+    {
+        CFRelease(self.addressBook);
     }
 }
 
