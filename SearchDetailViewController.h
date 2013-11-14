@@ -3,7 +3,7 @@
 //  LA Fitness
 //
 //  Created by Gina Mullins on 8/6/13.
-//  Copyright (c) 2013 xxxxxxxxxx. All rights reserved.
+//  Copyright (c) 2013 Fitness International. All rights reserved.
 //
 
 #import <UIKit/UIKit.h>
@@ -40,7 +40,6 @@
 
 - (NSString*)amenitiesStr;
 - (NSString*)leaguesStr;
-- (NSString*)sportNameForLeague:(NSString*)sport;
 - (NSString*)formatClubHours:(NSInteger)index;
 - (NSString*)formatKidsKlubHours:(NSInteger)index;
 - (void)callClub;
