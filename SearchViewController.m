@@ -3,7 +3,7 @@
 //  LA Fitness
 //
 //  Created by Gina Mullins on 8/6/13.
-//  Copyright (c) 2013 xxxxxxxxxx. All rights reserved.
+//  Copyright (c) 2013 Fitness International. All rights reserved.
 //
 
 #import "SearchViewController.h"
@@ -16,6 +16,14 @@
 #import "PostalInfo.h"
 #import "Database.h"
 #import "Location.h"
+#import "GlobalMethods.h"
+#import "DeviceHardware.h"
+#import "ReachabilityManager.h"
+#import "GAI.h"
+#import "GAIDictionaryBuilder.h"
+
+#define kCitySportDefaultZip    @"94538"
+#define kLAFitnessDefaultZip    @"92612"
 
 
 NSString * const REUSE_SEARCH_ID = @"SearchCell";
@@ -25,6 +33,8 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
 
 @property (nonatomic, strong) PostalInfo *currentPostInfo;
 @property (nonatomic, readwrite) BOOL hasLeagues;
+@property (nonatomic, strong) NSString *lastZipCode;
+@property (nonatomic, strong) NSString *clubBrand;
 
 @end
 
@@ -62,13 +72,11 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
     if (self.tabIndex == kClubs)
     {
         // load default - clubs
-        self.listSelected = kClubs;
         self.sectionHeader = @"Clubs";
     }
     else if (self.tabIndex == kClasses)
     {
         // load default - clubs
-        self.listSelected = kClasses;
         self.sectionHeader = @"Classes";
     }
     
@@ -82,7 +90,21 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
     [self.gpsButton addTarget:self action:@selector(buttonHighlight:) forControlEvents:UIControlEventTouchDown];
     [self.gpsButton addTarget:self action:@selector(buttonNormal:) forControlEvents:UIControlEventTouchUpInside];
     
+    // get club brand
+    self.clubBrand = [[GlobalMethods sharedGlobalMethods] getCurrentBrand];
     
+    // setup zip code in text box
+    self.lastZipCode = [[NSUserDefaults standardUserDefaults] objectForKey:@"DefaultZipcode"];
+    if ([self.lastZipCode length] == 0)
+    {
+        if ([self.clubBrand isEqualToString:@"CSC"])
+            self.lastZipCode = kCitySportDefaultZip;
+        else
+            self.lastZipCode = kLAFitnessDefaultZip;
+    }
+    
+    self.locationTextField.placeholder = self.lastZipCode;
+    self.locationTextField.keyboardType = UIKeyboardTypeNumbersAndPunctuation;
 }
 
 - (IBAction)buttonHighlight:(id)sender
@@ -97,16 +119,18 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
 
 -(void)refresh:(UIRefreshControl*)refreshControl
 {
-    [self loadListTable:self.tabIndex];
+    if ([self isNumeric:self.lastZipCode])
+        [self loadListTableByZip:self.tabIndex];
+    else
+        [self loadListTableByCity:self.tabIndex];
+    
     [refreshControl endRefreshing];
 }
 
 - (void)viewWillAppear:(BOOL)animated
 {
-    NSLog(@"SearchViewController");
+    LOG(@"SearchViewController");
     [super viewWillAppear:animated];
-    
-    // add UI changes
     
     if ([self.locationTextField.text length] == 0)
         [self.locationTextField performSelector:@selector(resignFirstResponder) withObject:nil afterDelay:0.01];
@@ -122,9 +146,21 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
     // setup current location
     [[Location sharedInstance] gpsUpdateLocation];
     
-    [self loadListTable:self.tabIndex];
+    if ([self isNumeric:self.lastZipCode])
+        [self loadListTableByZip:self.tabIndex];
+    else
+        [self loadListTableByCity:self.tabIndex];
+    
     [self createDataForAutoComplete];
     self.mapButton.hidden = NO;
+}
+
+- (void)viewWillDisappear:(BOOL)animated
+{
+    [super viewWillDisappear:animated];
+    
+    // save the last zip code searched
+    [[NSUserDefaults standardUserDefaults] setObject:self.lastZipCode forKey:@"DefaultZipcode"];
 }
 
 // load table cells faster and more efficiently
@@ -140,7 +176,6 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
     
     // select from DB all cities and zip
     self.allCities = [NSMutableArray arrayWithArray:[self.database allClubLocations]];
-    NSLog(@"allCities:%i", [self.allCities count]);
     
     // create table if first time here
     if (self.autoCompleteTable == nil)
@@ -155,20 +190,52 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
     }
 }
 
-- (void)loadListTable:(SearchSelected)selected
+// only called if searching by US zip code since it is ALWAYS numeric
+- (void)loadListTableByZip:(SearchSelected)selected
 {
     [self.listArray removeAllObjects];
     
-    if ([self.locationTextField.text length] == 0)
+    NSString *searchZip = ([self.locationTextField.text length] > 0) ? self.locationTextField.text : self.lastZipCode;
+    BOOL isValid = [self.database isZipCodeValid:searchZip];
+    if (isValid)
     {
-        // simple search by current location - need to load clubs for allIDs
-        [self loadForCurrentLocation];
+        self.listArray = [NSMutableArray arrayWithArray:[self.database selectClubsWithinDistanceFromZipcode:searchZip]];
+        
+        if ([self.listArray count] == 0)
+        {
+            // no clubs for that zip code
+            self.locationTextField.text = @"";
+            [self loadForLastLocation];
+            [self showAlert:1];
+        }
+        else
+        {
+            self.searchLat = [self.database searchLat];
+            self.searchLon = [self.database searchLon];
+            if ([self.locationTextField.text length] > 0)
+            {
+                self.lastZipCode = self.locationTextField.text;
+            }
+        }
+        
         [self loadOthers:selected];
+        if ([self.listArray count])
+        {
+            [self.listTable reloadData];
+            if ([self.listArray count])
+            {
+                [self.listTable scrollToRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:0]
+                                      atScrollPosition:UITableViewScrollPositionTop animated:YES];
+            }
+        }
     }
     else
     {
+        // calling Location Services for zips not in DB
+        NSString *zipWithCountry = [NSString stringWithFormat:@"%@ United States", searchZip];
+        
         [[Utils sharedInstance] showWithStatus:@""];
-        [self.location retrieveCoords:self.locationTextField.text withCompletionBLock:^(BOOL completed) {
+        [self.location retrieveCoords:zipWithCountry withCompletionBLock:^(BOOL completed) {
             
             if (completed)
             {
@@ -178,56 +245,151 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
                 
                 // need to look for clubs regardless to create allID's array
                 self.listArray = [NSMutableArray arrayWithArray:[self.database filteredClubsByLat:self.searchLat andLon:self.searchLon]];
+                
                 if ([self.listArray count] == 0)
                 {
                     // no clubs for that zip code
-                    [self loadForCurrentLocation];
+                    self.locationTextField.text = @"";
+                    [self loadForLastLocation];
                     [self showAlert:1];
+                }
+                else
+                {
+                    self.searchLat = [self.database searchLat];
+                    self.searchLon = [self.database searchLon];
+                    if ([self.locationTextField.text length] > 0)
+                    {
+                        self.lastZipCode = self.locationTextField.text;
+                    }
                 }
             }
             else
             {
                 // returned an error
-                [self loadForCurrentLocation];
+                [[Utils sharedInstance] dismissStatus];
                 self.locationTextField.text = @"";
+                [self loadForLastLocation];
             }
             
             [self loadOthers:selected];
             if ([self.listArray count])
             {
-                [self.listTable reloadData];  // need this inside the block
+                [self.listTable reloadData];
+                if ([self.listArray count])
+                {
+                    [self.listTable scrollToRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:0]
+                                          atScrollPosition:UITableViewScrollPositionTop animated:YES];
+                }
             }
-            
         }];
     }
+}
+
+- (void)loadListTableByCity:(SearchSelected)selected
+{
+    // call Location Services
+    [self.listArray removeAllObjects];
+    NSString *search = ([self.locationTextField.text length] > 0) ? self.locationTextField.text : self.lastZipCode;
     
-    [self.listTable reloadData];
-    if ([self.listArray count])
-    {
-        [self.listTable scrollToRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:0]
-                              atScrollPosition:UITableViewScrollPositionTop animated:YES];
-    }
+    [[Utils sharedInstance] showWithStatus:@""];
+    [self.location retrieveCoords:search withCompletionBLock:^(BOOL completed) {
+        
+        if (completed)
+        {
+            [[Utils sharedInstance] dismissStatus];
+            self.searchLat = self.location.searchLat;
+            self.searchLon = self.location.searchLon;
+            
+            // need to look for clubs regardless to create allID's array
+            self.listArray = [NSMutableArray arrayWithArray:[self.database filteredClubsByLat:self.searchLat andLon:self.searchLon]];
+            
+            if ([self.listArray count] == 0)
+            {
+                // no clubs for that zip code
+                self.locationTextField.text = @"";
+                [self loadForLastLocation];
+                [self showAlert:1];
+            }
+            else
+            {
+                self.searchLat = [self.database searchLat];
+                self.searchLon = [self.database searchLon];
+                if ([self.locationTextField.text length] > 0)
+                {
+                    // get first record for last successful zip
+                    ClubInfo *info = [self.listArray objectAtIndex:0];
+                    self.lastZipCode = info.zipCode;
+                }
+            }
+        }
+        else
+        {
+            // returned an error
+            [[Utils sharedInstance] dismissStatus];
+            self.locationTextField.text = @"";
+            [self loadForLastLocation];
+        }
+        
+        [self loadOthers:selected];
+        if ([self.listArray count])
+        {
+            [self.listTable reloadData];
+            if ([self.listArray count])
+            {
+                [self.listTable scrollToRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:0]
+                                      atScrollPosition:UITableViewScrollPositionTop animated:YES];
+            }
+        }
+    }];
+
 }
 
 - (void)loadOthers:(SearchSelected)selected
 {
+    NSString *GACategory = @"";
+    NSString *GAAction = @"";
+    NSString *GALabel = @"";
+    
     switch (selected)
     {
         case kClubs:
+        {
+            GACategory = @"Find Club";
+            GAAction = @"F_Clubs";
+            GALabel = ([self.locationTextField.text length] > 0) ? @"F_Club_NOGPS" : @"F_Club_GPS";
+            
             self.sectionHeader = @"Clubs";
             break;
+        }
             
         case kClasses:
+        {
+            GACategory = @"Find Class";
+            GAAction = @"F_Classes";
+            GALabel = ([self.locationTextField.text length] > 0) ? @"F_Classes_NOGPS" : @"F_Classes_GPS";
+            
             self.listArray = [NSMutableArray arrayWithArray:[self.database classNamesForClubID:kALLCLUBS]];
             self.sectionHeader = @"Classes";
             break;
+        }
             
         case kAmenities:
+        {
+            GACategory = @"Amenities";
+            GAAction = @"Amenities";
+            GALabel = ([self.locationTextField.text length] > 0) ? @"S_Amenities_NOGPS" : @"S_Amenities_GPS";
+            
             self.listArray = [NSMutableArray arrayWithArray:[self.database amenitiesForClubID:kALLCLUBS]];
             self.sectionHeader = @"Amenities";
             break;
+        }
             
         case kLeagues:
+        {
+            GACategory = @"Leagues";
+            GAAction = @"Leagues";
+            GALabel = ([self.locationTextField.text length] > 0) ? @"S_Leagues_NOGPS" : @"S_Leagues_GPS";
+            
             self.listArray = [NSMutableArray arrayWithArray:[self.database leaguesForClubID:kALLCLUBS]];
             self.sectionHeader = @"Leagues";
             
@@ -241,7 +403,17 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
                 self.hasLeagues = YES;
 
             break;
+        }
     }
+    
+    // XGoogle Analytics
+    NSMutableDictionary *event =
+    [[GAIDictionaryBuilder createEventWithCategory:GACategory
+                                            action:GAAction
+                                             label:GALabel
+                                             value:nil] build];
+    [[GAI sharedInstance].defaultTracker send:event];
+    [[GAI sharedInstance] dispatch];
 }
 
 - (void)loadForCurrentLocation
@@ -249,7 +421,19 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
     self.searchLat = [[[NSUserDefaults standardUserDefaults] objectForKey:@"currentLat"] floatValue];
     self.searchLon = [[[NSUserDefaults standardUserDefaults] objectForKey:@"currentLon"] floatValue];
     self.listArray = [NSMutableArray arrayWithArray:[self.database filteredClubs]];
+    
+    if ([self.listArray count])
+    {
+        ClubInfo *info = [self.listArray objectAtIndex:0];
+        self.lastZipCode = info.zipCode;
+    }
 }
+
+- (void)loadForLastLocation
+{
+    self.listArray = [NSMutableArray arrayWithArray:[self.database selectClubsWithinDistanceFromZipcode:self.lastZipCode]];
+}
+
 
 - (NSInteger)sportNameIndexForLeague:(NSString*)sport
 {
@@ -277,6 +461,7 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
 - (void)showAlert:(NSInteger)tag
 {
     NSString *message = @"";
+    NSString *message2 = @"";
     
     if (tag == 0)
     {
@@ -285,16 +470,28 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
     else if (tag == 1)
     {
         message = @"No Clubs Found for Search";
+    }
+    else if (tag == 2)
+    {
+        message = @"No Network Connectivity";
+        message2 = @"Your device is not connected to a network. Please check your settings and try again.";
         self.locationTextField.text = @"";
+        self.locationTextField.placeholder = self.lastZipCode;
+    }
+    else if (tag == 3)
+    {
+        message = @"Zip Code Not Found";
+        message2 = @"Please try your search again";
+        self.locationTextField.text = @"";
+        self.locationTextField.placeholder = self.lastZipCode;
     }
     
     UIAlertView *alert = [[UIAlertView alloc]
                           initWithTitle:message
-                          message:nil
+                          message:message2
                           delegate:self
                           cancelButtonTitle:@"Continue"
                           otherButtonTitles:nil, nil];
-    
     [alert show];
 }
 
@@ -318,9 +515,30 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
 - (IBAction)GPSAction:(id)sender
 {
     self.locationTextField.text = @"";
-    [self loadListTable:self.tabIndex];
+    
+    if ([[ReachabilityManager sharedManager] isReachable])
+    {
+        self.locationTextField.placeholder = @"Zip Code";
+        [self loadForCurrentLocation];
+        [self loadOthers:self.tabIndex];
+        if ([self.listArray count])
+        {
+            [self.listTable reloadData];
+            if ([self.listArray count])
+            {
+                [self.listTable scrollToRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:0]
+                                      atScrollPosition:UITableViewScrollPositionTop animated:YES];
+            }
+        }
+    }
+    else
+    {
+        self.locationTextField.placeholder = self.lastZipCode;
+        [self showAlert:2];
+    }
 }
 
+// connected in IB valueDidChange
 - (IBAction)showAutoCompleteTable:(id)sender
 {
     [self resetAutoCompleteTable];
@@ -389,6 +607,8 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
     return [scanner scanInteger:NULL] && [scanner isAtEnd];
 }
 
+
+
 #pragma mark - UITextField delegate
 
 - (void)textFieldDidBeginEditing:(UITextField *)textField
@@ -412,7 +632,16 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
     // make sure we have something before reloading
     if ([self.locationTextField.text length] > 0)
     {
-        [self loadListTable:self.tabIndex];
+        if ([self isNumeric:self.locationTextField.text])
+        {
+            [self loadListTableByZip:self.tabIndex];
+        }
+        else
+        {
+            // all other searches, including Canada
+            self.locationTextField.text = [self.locationTextField.text uppercaseString];
+            [self loadListTableByCity:self.tabIndex];
+        }
         
         if ([self.autoCompleteArray count] > 0)
             [self resetAutoCompleteTable];
@@ -442,8 +671,11 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
 - (void)tabBar:(UITabBar *)tabBar didSelectItem:(UITabBarItem *)item
 {
     self.tabIndex = [item tag];
-    self.listSelected = self.tabIndex;
-    [self loadListTable:self.tabIndex];
+    
+    if ([self isNumeric:self.lastZipCode])
+        [self loadListTableByZip:self.tabIndex];
+    else
+        [self loadListTableByCity:self.tabIndex];
 }
 
 #pragma mark Table Data Source and Delegate Methods
@@ -490,8 +722,9 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
         NSDictionary *info = [self.autoCompleteArray objectAtIndex:indexPath.row];
         NSInteger index = [[info valueForKey:@"index"] integerValue];
         self.currentPostInfo = [self.allCities objectAtIndex:index];
-        [cell.textLabel setText:[NSString stringWithFormat:@"%@, %@", self.currentPostInfo.city, self.currentPostInfo.state]];
-        [cell.textLabel setFont:[UIFont systemFontOfSize:13]];
+        [cell.textLabel setText:[NSString stringWithFormat:@"%@, %@ %@",
+                                 self.currentPostInfo.city, self.currentPostInfo.state, self.currentPostInfo.zipCode]];
+        [cell.textLabel setFont:[UIFont systemFontOfSize:11]];
         return cell;
     }
 }
@@ -500,9 +733,17 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
 {
     if (tableView == self.listTable)
     {
-        if (self.listSelected == kClubs)
+        if (self.tabIndex == kClubs)
         {
-            NSLog(@"1listArray count:%i", [self.listArray count]);
+            // XGoogle Analytics
+            NSMutableDictionary *event =
+            [[GAIDictionaryBuilder createEventWithCategory:@"Find Club"
+                                                    action:@"F_Clubs"
+                                                     label:@"F_Club_SpecificClub"
+                                                     value:nil] build];
+            [[GAI sharedInstance].defaultTracker send:event];
+            [[GAI sharedInstance] dispatch];
+            
             ClubInfo *info = [self.listArray objectAtIndex:indexPath.row];
             SearchDetailViewController *detailView = [[SearchDetailViewController alloc] initWithNibName:@"SearchDetailViewController" bundle:nil];
             detailView.clubInfo = info;
@@ -515,24 +756,51 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
             SearchCell *selectedCell = (SearchCell*)[tableView cellForRowAtIndexPath:indexPath];
             
             ClubListViewController *clubList = [[ClubListViewController alloc] initWithNibName:@"ClubListViewController" bundle:nil];
-            clubList.listSelected = self.listSelected;
+            clubList.listSelected = self.tabIndex;
             clubList.searchLat = self.searchLat;
             clubList.searchLon = self.searchLon;
             clubList.headerText = selectedCell.title.text;
             
             // pass the list of clubs
-            if (self.listSelected == kLeagues)
+            if (self.tabIndex == kLeagues)
             {
+                // XGoogle Analytics
+                NSMutableDictionary *event =
+                [[GAIDictionaryBuilder createEventWithCategory:@"Leagues"
+                                                        action:@"Leagues"
+                                                         label:@"S_LeagueType"
+                                                         value:nil] build];
+                [[GAI sharedInstance].defaultTracker send:event];
+                [[GAI sharedInstance] dispatch];
+                
                 NSString *sportName = [self.listArray objectAtIndex:indexPath.row];
                 clubList.searchID = [self sportNameIndexForLeague:sportName];
             }
-            else if (self.listSelected == kAmenities)
+            else if (self.tabIndex == kAmenities)
             {
+                // XGoogle Analytics
+                NSMutableDictionary *event =
+                [[GAIDictionaryBuilder createEventWithCategory:@"Amenities"
+                                                        action:@"Amenities"
+                                                         label:@"S_SelectAmenity"
+                                                         value:nil] build];
+                [[GAI sharedInstance].defaultTracker send:event];
+                [[GAI sharedInstance] dispatch];
+                
                 NSDictionary *info = [self.listArray objectAtIndex:indexPath.row];
                 clubList.searchID = [[info valueForKey:@"amenityID"] integerValue];
             }
             else
             {
+                // XGoogle Analytics
+                NSMutableDictionary *event =
+                [[GAIDictionaryBuilder createEventWithCategory:@"Find Class"
+                                                        action:@"F_Classes"
+                                                         label:@"F_Select_Class"
+                                                         value:nil] build];
+                [[GAI sharedInstance].defaultTracker send:event];
+                [[GAI sharedInstance] dispatch];
+                
                 NSDictionary *info = [self.listArray objectAtIndex:indexPath.row];
                 clubList.searchID = [[info valueForKey:@"classID"] integerValue];
             }
@@ -546,7 +814,8 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
         NSDictionary *info = [self.autoCompleteArray objectAtIndex:indexPath.row];
         NSInteger index = [[info valueForKey:@"index"] integerValue];
         self.currentPostInfo = [self.allCities objectAtIndex:index];
-        self.locationTextField.text = [NSString stringWithFormat:@"%@, %@", self.currentPostInfo.city, self.currentPostInfo.state];
+        self.locationTextField.text = [NSString stringWithFormat:@"%@, %@ %@",
+                                       self.currentPostInfo.city, self.currentPostInfo.state, self.currentPostInfo.zipCode];
         [self resetAutoCompleteTable];
     }
 }
@@ -598,7 +867,7 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
     [cell.miscLabel setFont:[UIFont systemFontOfSize:SearchCell_Misc_FontSize]];
     [cell.miscLabel setTextColor:[UIColor blackColor]];
     
-    if (self.listSelected == kClubs)
+    if (self.tabIndex == kClubs)
     {
         ClubInfo *info = [self.listArray objectAtIndex:indexPath.row];
         
@@ -609,7 +878,7 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
         [cell.miscLabel setTextAlignment:NSTextAlignmentRight];
         cell.imageView.hidden = YES;
     }
-    else if (self.listSelected == kClasses)
+    else if (self.tabIndex == kClasses)
     {
         NSDictionary *info = [self.listArray objectAtIndex:indexPath.row];
         
@@ -621,7 +890,7 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
         [cell.title setFrame:CGRectMake(7, 10, 200, 25)];
         
     }
-    else if (self.listSelected == kAmenities)
+    else if (self.tabIndex == kAmenities)
     {
         NSDictionary *info = [self.listArray objectAtIndex:indexPath.row];
         
@@ -632,7 +901,7 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
         
         [cell.title setFrame:CGRectMake(51, 10, 200, 25)];
     }
-    else if (self.listSelected == kLeagues)
+    else if (self.tabIndex == kLeagues)
     {
         // Amenities and Leagues
         NSString *sportName = [self.listArray objectAtIndex:indexPath.row];
