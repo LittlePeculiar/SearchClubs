@@ -3,7 +3,7 @@
 //  LA Fitness
 //
 //  Created by Gina Mullins on 8/6/13.
-//  Copyright (c) 2013 xxxxxxxxxxx. All rights reserved.
+//  Copyright (c) 2013 Fitness International. All rights reserved.
 //
 
 #import <UIKit/UIKit.h>
@@ -24,10 +24,10 @@
 @property (nonatomic, strong) NSMutableArray *allCities;
 @property (nonatomic, strong) NSMutableArray *autoCompleteArray;
 @property (nonatomic, copy) NSString *sectionHeader;
-@property (nonatomic, assign) SearchSelected listSelected;
 @property (nonatomic, assign) float searchLat;
 @property (nonatomic, assign) float searchLon;
 @property (nonatomic, assign) NSInteger tabIndex;
+
 
 // UI
 
@@ -43,7 +43,8 @@
 - (IBAction)GPSAction:(id)sender;
 - (IBAction)showAutoCompleteTable:(id)sender;
 
-- (void)loadListTable:(SearchSelected)selected;
+- (void)loadListTableByZip:(SearchSelected)selected;
+- (void)loadListTableByCity:(SearchSelected)selected;
 - (NSInteger)sportNameIndexForLeague:(NSString*)sport;
 - (void)showAlert:(NSInteger)tag;
 - (void)createDataForAutoComplete;
