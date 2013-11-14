@@ -1,50 +1,55 @@
 //
-//  SearchViewController.m
+//  SearchDetailViewController.m
 //  LA Fitness
 //
 //  Created by Gina Mullins on 8/6/13.
 //  Copyright (c) 2013 Fitness International. All rights reserved.
 //
 
-#import "SearchViewController.h"
 #import "SearchDetailViewController.h"
-#import "ClubListViewController.h"
 #import "MapViewController.h"
-#import "SearchCell.h"
-#import "ClubInfo.h"
+#import "ClassDetailViewController.h"
+#import "ClubHoursInfo.h"
 #import "ClassesInfo.h"
-#import "PostalInfo.h"
+#import "SearchCell.h"
+#import "ShowButtonsCell.h"
+#import "ShowLabelCell.h"
 #import "Database.h"
-#import "Location.h"
+#import "FormatDate.h"
 #import "GlobalMethods.h"
-#import "DeviceHardware.h"
-#import "ReachabilityManager.h"
 #import "GAI.h"
 #import "GAIDictionaryBuilder.h"
+#import <AddressBook/AddressBook.h>
+#import <AddressBookUI/AddressBookUI.h>
+#import "FreePassViewController.h"
 
-#define kCitySportDefaultZip    @"94538"
-#define kLAFitnessDefaultZip    @"92612"
+// toggle to show sort type
+#define kSortClassName  0
+#define kSortClassTime  1
+
+NSString * const REUSE_SEARCH_DETAIL_ID = @"SearchCell";
+NSString * const REUSE_SHOW_BUTTONS_ID = @"ShowButtonsCell";
+NSString * const REUSE_SHOW_LABEL_ID = @"ShowLabelCell";
 
 
-NSString * const REUSE_SEARCH_ID = @"SearchCell";
+@interface SearchDetailViewController ()
 
-
-@interface SearchViewController ()
-
-@property (nonatomic, strong) PostalInfo *currentPostInfo;
-@property (nonatomic, readwrite) BOOL hasLeagues;
-@property (nonatomic, strong) NSString *lastZipCode;
-@property (nonatomic, strong) NSString *clubBrand;
+@property (nonatomic, assign) float listTableHeight;
+@property (nonatomic, assign) float listTableHeightForDetails;
 
 @end
 
-@implementation SearchViewController
+@implementation SearchDetailViewController
+{
+    ABAddressBookRef _addressBook;
+}
 
 - (id)initWithNibName:(NSString *)nibNameOrNil bundle:(NSBundle *)nibBundleOrNil
 {
     self = [super initWithNibName:nibNameOrNil bundle:nibBundleOrNil];
     if (self) {
         // Custom initialization
+        
     }
     return self;
 }
@@ -53,884 +58,1069 @@ NSString * const REUSE_SEARCH_ID = @"SearchCell";
 {
     [super viewDidLoad];
     
-    if (self.listArray == nil)
-        self.listArray = [[NSMutableArray alloc] init];
+    if (self.sections == nil)
+        self.sections = [[NSMutableDictionary alloc] init];
+    if (self.favoriteClubs == nil)
+        self.favoriteClubs = [[NSMutableArray alloc] init];
+    if (self.favoriteClasses == nil)
+        self.favoriteClasses = [[NSMutableArray alloc] init];
     
-    if (self.allCities == nil)
-        self.allCities = [[NSMutableArray alloc] init];
-    
-    if (self.autoCompleteArray == nil)
-        self.autoCompleteArray = [[NSMutableArray alloc] init];
-    
-    if (self.database == nil)
-        self.database = [[Database alloc] init];
-    if (self.location == nil)
-        self.location = [[Location alloc] init];
+    // setup the doc dir path
+    NSArray *docDirSearch = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString *docDirPath = [docDirSearch objectAtIndex:0];
+    NSString *docDir = [docDirPath stringByAppendingPathComponent:@"data/"];
+    self.favoritesPath = [docDir stringByAppendingPathComponent:@"Favorites.plist"];
     
     [self registerNibs];
     
-    if (self.tabIndex == kClubs)
+    // make default
+    [self.sortByClassLabel setBackgroundColor:[UIColor darkGrayColor]];
+    [self.sortByTimeLabel setBackgroundColor:[UIColor lightGrayColor]];
+    self.isFavoriteClub = NO;
+    
+    self.sortType = kSortClassName;
+    self.displayType = kClubDetails;
+    
+    if ([[Utils sharedInstance] isIPhone5])
     {
-        // load default - clubs
-        self.sectionHeader = @"Clubs";
+        self.listTableHeight = 364;
+        self.listTableHeightForDetails = 454;
     }
-    else if (self.tabIndex == kClasses)
-    {
-        // load default - clubs
-        self.sectionHeader = @"Classes";
-    }
-    
-    // add pull to refresh control
-    UIRefreshControl *refreshControl = [[UIRefreshControl alloc] init];
-    [refreshControl setTintColor:[UIColor redColor]];
-    [refreshControl addTarget:self action:@selector(refresh:) forControlEvents:UIControlEventValueChanged];
-    [self.listTable addSubview:refreshControl];
-    
-    // setup the GPS button to change the background color
-    [self.gpsButton addTarget:self action:@selector(buttonHighlight:) forControlEvents:UIControlEventTouchDown];
-    [self.gpsButton addTarget:self action:@selector(buttonNormal:) forControlEvents:UIControlEventTouchUpInside];
-    
-    // get club brand
-    self.clubBrand = [[GlobalMethods sharedGlobalMethods] getCurrentBrand];
-    
-    // setup zip code in text box
-    self.lastZipCode = [[NSUserDefaults standardUserDefaults] objectForKey:@"DefaultZipcode"];
-    if ([self.lastZipCode length] == 0)
-    {
-        if ([self.clubBrand isEqualToString:@"CSC"])
-            self.lastZipCode = kCitySportDefaultZip;
-        else
-            self.lastZipCode = kLAFitnessDefaultZip;
-    }
-    
-    self.locationTextField.placeholder = self.lastZipCode;
-    self.locationTextField.keyboardType = UIKeyboardTypeNumbersAndPunctuation;
-}
-
-- (IBAction)buttonHighlight:(id)sender
-{
-    [self.gpsButton setBackgroundColor:[UIColor colorWithRed:.87 green:.87 blue:.87 alpha:1.0]];
-}
-
-- (IBAction)buttonNormal:(id)sender
-{
-    [self.gpsButton setBackgroundColor:[UIColor clearColor]];
-}
-
--(void)refresh:(UIRefreshControl*)refreshControl
-{
-    if ([self isNumeric:self.lastZipCode])
-        [self loadListTableByZip:self.tabIndex];
     else
-        [self loadListTableByCity:self.tabIndex];
+    {
+        self.listTableHeight = 290;
+        self.listTableHeightForDetails = 450;
+    }
     
-    [refreshControl endRefreshing];
+    // first page loaded is always details
+    self.listTable.frame = CGRectMake(0, 0, 320, self.listTableHeightForDetails);
 }
 
 - (void)viewWillAppear:(BOOL)animated
 {
-    LOG(@"SearchViewController");
+    LOG(@"SearchDetailViewController");
     [super viewWillAppear:animated];
     
-    if ([self.locationTextField.text length] == 0)
-        [self.locationTextField performSelector:@selector(resignFirstResponder) withObject:nil afterDelay:0.01];
+    self.headerLabel.text = self.headerText;
+    self.headerLabel.font = [UIFont systemFontOfSize:17];
+    self.isFavoriteClub = NO;
     
-    UIBarButtonItem *rightButton = [[UIBarButtonItem alloc] initWithTitle:@"Map"
-                                                                    style:UIBarButtonItemStylePlain
-                                                                   target:self action:@selector(mapAction:)];
+    [self.tabBar setSelectedItem:[self.tabBar.items objectAtIndex:self.displayType]];
+    [self.listTable reloadData];
     
-    [[self navigationItem] setRightBarButtonItem:rightButton];
-    
-    [self.tabBar setSelectedItem:[self.tabBar.items objectAtIndex:self.tabIndex]];
-    
-    // setup current location
-    [[Location sharedInstance] gpsUpdateLocation];
-    
-    if ([self isNumeric:self.lastZipCode])
-        [self loadListTableByZip:self.tabIndex];
-    else
-        [self loadListTableByCity:self.tabIndex];
-    
-    [self createDataForAutoComplete];
-    self.mapButton.hidden = NO;
+    // look for favorite Clubs and Classes
+    NSFileManager *manager = [NSFileManager defaultManager];
+    if ([manager fileExistsAtPath:self.favoritesPath])
+    {
+        [self.favoriteClubs removeAllObjects];
+        [self.favoriteClasses removeAllObjects];
+        
+        NSDictionary *dict = [NSDictionary dictionaryWithContentsOfFile:self.favoritesPath];
+        self.favoriteClubs = [NSMutableArray arrayWithArray:[dict objectForKey:@"clubIDs"]];
+        self.favoriteClasses = [NSMutableArray arrayWithArray:[dict objectForKey:@"classIDs"]];        // keep for saving entire plist later
+        
+        NSNumber *clubNbr = [NSNumber numberWithInteger:self.clubInfo.clubID];
+        if ([self.favoriteClubs containsObject:clubNbr])
+        {
+            self.isFavoriteClub = YES;
+        }
+    }
 }
 
 - (void)viewWillDisappear:(BOOL)animated
 {
-    [super viewWillDisappear:animated];
+    [super viewWillDisappear:YES];
     
-    // save the last zip code searched
-    [[NSUserDefaults standardUserDefaults] setObject:self.lastZipCode forKey:@"DefaultZipcode"];
-}
-
-// load table cells faster and more efficiently
-- (void)registerNibs
-{
-    UINib *searchCellNib = [UINib nibWithNibName:REUSE_SEARCH_ID bundle:[NSBundle bundleForClass:[SearchCell class]]];
-    [self.listTable registerNib:searchCellNib forCellReuseIdentifier:REUSE_SEARCH_ID];
-}
-
-- (void)createDataForAutoComplete
-{
-    [self.allCities removeAllObjects];
-    
-    // select from DB all cities and zip
-    self.allCities = [NSMutableArray arrayWithArray:[self.database allClubLocations]];
-    
-    // create table if first time here
-    if (self.autoCompleteTable == nil)
+    // save favorites before leaving
+    NSFileManager *manager = [NSFileManager defaultManager];
+    if ([manager fileExistsAtPath:self.favoritesPath])
     {
-        self.autoCompleteTable = [[UITableView alloc] initWithFrame:CGRectMake(92, 39, 218, 120) style:UITableViewStylePlain];
-        self.autoCompleteTable.delegate = self;
-        self.autoCompleteTable.dataSource = self;
-        self.autoCompleteTable.scrollEnabled = YES;
-        self.autoCompleteTable.separatorStyle = UITableViewCellSeparatorStyleNone;
-        self.autoCompleteTable.hidden = YES;
-        [self.view addSubview:self.autoCompleteTable];
+        [manager removeItemAtPath:self.favoritesPath error:nil];
+    }
+    
+    NSMutableDictionary *dict = [[NSMutableDictionary alloc] init];
+    if ([self.favoriteClubs count] > 0)
+    {
+        [dict setObject:self.favoriteClubs forKey:@"clubIDs"];
+    }
+    if ([self.favoriteClasses count] > 0)
+    {
+        [dict setObject:self.favoriteClasses forKey:@"classIDs"];
+    }
+    
+    if ([dict count] > 0)
+    {
+        [dict writeToFile:self.favoritesPath atomically:YES];
     }
 }
 
-// only called if searching by US zip code since it is ALWAYS numeric
-- (void)loadListTableByZip:(SearchSelected)selected
+- (NSString*)amenitiesStr
 {
-    [self.listArray removeAllObjects];
+    NSString *list = @"";
+    NSMutableString *all = [NSMutableString string];
+    NSArray *DBArray = [[Database sharedInstance] amenitiesForClubID:self.clubInfo.clubID];
     
-    NSString *searchZip = ([self.locationTextField.text length] > 0) ? self.locationTextField.text : self.lastZipCode;
-    BOOL isValid = [self.database isZipCodeValid:searchZip];
-    if (isValid)
+    if ([DBArray count] > 0)
     {
-        self.listArray = [NSMutableArray arrayWithArray:[self.database selectClubsWithinDistanceFromZipcode:searchZip]];
-        
-        if ([self.listArray count] == 0)
+        // names only
+        [all appendString:@"Amenities:\n"];
+        for (NSDictionary *info in DBArray)
         {
-            // no clubs for that zip code
-            self.locationTextField.text = @"";
-            [self loadForLastLocation];
-            [self showAlert:1];
-        }
-        else
-        {
-            self.searchLat = [self.database searchLat];
-            self.searchLon = [self.database searchLon];
-            if ([self.locationTextField.text length] > 0)
-            {
-                self.lastZipCode = self.locationTextField.text;
-            }
+            NSString *desc = [info valueForKey:@"desc"];    // contains amenity name
+            [all appendString:[NSString stringWithFormat:@"%@, ", desc]];
         }
         
-        [self loadOthers:selected];
-        if ([self.listArray count])
-        {
-            [self.listTable reloadData];
-            if ([self.listArray count])
-            {
-                [self.listTable scrollToRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:0]
-                                      atScrollPosition:UITableViewScrollPositionTop animated:YES];
-            }
-        }
+        // remove the last comma and last space
+        list = [all substringToIndex:[all length] - 2];
     }
     else
     {
-        // calling Location Services for zips not in DB
-        NSString *zipWithCountry = [NSString stringWithFormat:@"%@ United States", searchZip];
+        list = @"Amenities:\nNo amenities at this location";
+    }
+    
+    return list;
+}
+
+- (NSString*)leaguesStr
+{
+    NSString *list = @"";
+    NSMutableString *all = [NSMutableString string];
+    NSArray *DBArray = [[Database sharedInstance] leaguesForClubID:self.clubInfo.clubID];
+    
+    if ([DBArray count] > 0)
+    {
+        // already an array of strings
+        [all appendString:@"Leagues:\n"];
+        for (NSString *sport in DBArray)
+        {
+            NSString *sportName = [[Utils sharedInstance] sportNameForLeague:sport];
+            [all appendString:[NSString stringWithFormat:@"%@, ", sportName]];
+        }
         
-        [[Utils sharedInstance] showWithStatus:@""];
-        [self.location retrieveCoords:zipWithCountry withCompletionBLock:^(BOOL completed) {
-            
-            if (completed)
+        // remove the last comma and last space
+        list = [all substringToIndex:[all length] - 2];
+    }
+    else
+    {
+        list = @"Leagues:\nNo leagues at this location";
+    }
+    
+    return list;
+}
+
+- (NSString*)formatClubHours:(NSInteger)index
+{
+    NSString *clubHours = @"";
+    
+    for (ClubHoursInfo *info in self.listArray)
+    {
+        if (info.scheduleTypeID == 1 && info.dayID == index)
+        {
+            if (info.open24)
             {
-                [[Utils sharedInstance] dismissStatus];
-                self.searchLat = self.location.searchLat;
-                self.searchLon = self.location.searchLon;
-                
-                // need to look for clubs regardless to create allID's array
-                self.listArray = [NSMutableArray arrayWithArray:[self.database filteredClubsByLat:self.searchLat andLon:self.searchLon]];
-                
-                if ([self.listArray count] == 0)
-                {
-                    // no clubs for that zip code
-                    self.locationTextField.text = @"";
-                    [self loadForLastLocation];
-                    [self showAlert:1];
-                }
-                else
-                {
-                    self.searchLat = [self.database searchLat];
-                    self.searchLon = [self.database searchLon];
-                    if ([self.locationTextField.text length] > 0)
-                    {
-                        self.lastZipCode = self.locationTextField.text;
-                    }
-                }
+                clubHours = @"Open 24 Hrs";
+            }
+            else if (info.closed)
+            {
+                clubHours = @"Closed";
             }
             else
             {
-                // returned an error
-                [[Utils sharedInstance] dismissStatus];
-                self.locationTextField.text = @"";
-                [self loadForLastLocation];
+                // get openTime
+                NSArray *openArray = [info.openTime componentsSeparatedByString:@":"];
+                NSInteger openHour = [[openArray objectAtIndex:0] integerValue];
+                NSString *openHourStr = [FormatDate formatHour:openHour];
+                
+                // get closeTime
+                NSArray *closeArray = [info.closeTime componentsSeparatedByString:@":"];
+                NSInteger closeHour = [[closeArray objectAtIndex:0] integerValue];
+                NSString *closeHourStr = [FormatDate formatHour:closeHour];
+                
+                clubHours = [NSString stringWithFormat:@"%@ - %@", openHourStr, closeHourStr];
             }
-            
-            [self loadOthers:selected];
-            if ([self.listArray count])
+            break;
+        }
+    }
+    return clubHours;
+}
+
+- (NSString*)formatKidsKlubHours:(NSInteger)index
+{
+    NSMutableArray *array = [[NSMutableArray alloc] init];
+    NSString *clubHours = @"";
+    
+    for (ClubHoursInfo *info in self.listArray)
+    {
+        if (info.scheduleTypeID == 2 && info.dayID == index)
+        {
+            if (info.closed)
             {
-                [self.listTable reloadData];
-                if ([self.listArray count])
-                {
-                    [self.listTable scrollToRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:0]
-                                          atScrollPosition:UITableViewScrollPositionTop animated:YES];
-                }
+                clubHours = @"Closed";
+                break;
             }
-        }];
+            NSArray *openArray = [info.openTime componentsSeparatedByString:@":"];
+            NSInteger openHour = [[openArray objectAtIndex:0] integerValue];
+            NSString *openHourStr = [FormatDate formatHour:openHour];
+            
+            NSArray *closeArray = [info.closeTime componentsSeparatedByString:@":"];
+            NSInteger closeHour = [[closeArray objectAtIndex:0] integerValue];
+            NSString *closeHourStr = [FormatDate formatHour:closeHour];
+            
+            NSString *clubHoursStr = [NSString stringWithFormat:@"%@ - %@\n", openHourStr, closeHourStr];
+            [array addObject:clubHoursStr];
+        }
+    }
+    
+    NSMutableString *allHours = [NSMutableString string];
+    
+    for (int i = 0; i < [array count]; i++)
+    {
+        NSString *hourString = [array objectAtIndex:i];
+        [allHours appendString:hourString];
+    }
+    if ([allHours length] > 0)
+    {
+        clubHours = [allHours substringToIndex:[allHours length] - 1];
+    }
+    
+    return clubHours;
+}
+
+- (void)callClub
+{
+    NSString *model = [[DeviceHardware sharedInstance] modelString];
+    model = [model substringToIndex:6];
+
+    if ([model isEqualToString:@"iPhone"])
+    {
+        NSString *message = [NSString stringWithFormat:@"Call Club\n%@", self.clubInfo.desc];
+        NSString *message2 = [NSString stringWithFormat:@"1-%@", self.clubInfo.phone];
+        UIAlertView *alert = [[UIAlertView alloc]
+                              initWithTitle:message
+                              message:message2
+                              delegate:self
+                              cancelButtonTitle:@"Cancel"
+                              otherButtonTitles:@"Call", nil];
+        
+        [alert show];
+    }
+    else
+    {
+        UIAlertView *alert = [[UIAlertView alloc]
+                              initWithTitle:@"Unable to make Calls from this device"
+                              message:nil
+                              delegate:self
+                              cancelButtonTitle:@"OK"
+                              otherButtonTitles:nil, nil];
+        
+        [alert show];
     }
 }
 
-- (void)loadListTableByCity:(SearchSelected)selected
+- (void)sendEmail
 {
-    // call Location Services
-    [self.listArray removeAllObjects];
-    NSString *search = ([self.locationTextField.text length] > 0) ? self.locationTextField.text : self.lastZipCode;
-    
-    [[Utils sharedInstance] showWithStatus:@""];
-    [self.location retrieveCoords:search withCompletionBLock:^(BOOL completed) {
+    if ([MFMailComposeViewController canSendMail])
+    {
+        [[UINavigationBar appearance] setBackgroundImage:[UIImage imageNamed:@"homeHeaderPortraitwLogo.png"] forBarMetrics:UIBarMetricsDefault];
+        MFMailComposeViewController *mailController = [[MFMailComposeViewController alloc] init];
         
-        if (completed)
+        mailController.mailComposeDelegate = self;
+        
+        NSString *clubType = [[GlobalMethods sharedGlobalMethods] getCurrentBrand];
+        NSString *clubName = @"";
+        if ([clubType isEqualToString:@"CSC"])
         {
-            [[Utils sharedInstance] dismissStatus];
-            self.searchLat = self.location.searchLat;
-            self.searchLon = self.location.searchLon;
-            
-            // need to look for clubs regardless to create allID's array
-            self.listArray = [NSMutableArray arrayWithArray:[self.database filteredClubsByLat:self.searchLat andLon:self.searchLon]];
-            
-            if ([self.listArray count] == 0)
-            {
-                // no clubs for that zip code
-                self.locationTextField.text = @"";
-                [self loadForLastLocation];
-                [self showAlert:1];
-            }
-            else
-            {
-                self.searchLat = [self.database searchLat];
-                self.searchLon = [self.database searchLon];
-                if ([self.locationTextField.text length] > 0)
-                {
-                    // get first record for last successful zip
-                    ClubInfo *info = [self.listArray objectAtIndex:0];
-                    self.lastZipCode = info.zipCode;
-                }
-            }
+            clubName = @"City Sports";
         }
         else
         {
-            // returned an error
-            [[Utils sharedInstance] dismissStatus];
-            self.locationTextField.text = @"";
-            [self loadForLastLocation];
+            clubName = @"LA Fitness";
         }
-        
-        [self loadOthers:selected];
-        if ([self.listArray count])
-        {
-            [self.listTable reloadData];
-            if ([self.listArray count])
-            {
-                [self.listTable scrollToRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:0]
-                                      atScrollPosition:UITableViewScrollPositionTop animated:YES];
-            }
-        }
-    }];
-
+        NSString *body = [NSString stringWithFormat:@"%@\n%@\n%@\n%@, %@",
+                                 clubName, self.clubInfo.desc, self.clubInfo.address, self.clubInfo.city, self.clubInfo.state];
+        [mailController setSubject:@" "];
+        [mailController setMessageBody:body isHTML:NO];
+    
+        [self presentViewController:mailController animated:YES completion:nil];
+        [[mailController navigationBar] setTintColor:[UIColor whiteColor]];
+    }
+    else
+    {
+        UIAlertView* myAlert = [[UIAlertView alloc] initWithTitle:@"Unable to send email from this device"
+                                                          message:nil
+                                                         delegate:nil
+                                                cancelButtonTitle:@"OK"
+                                                otherButtonTitles:nil];
+        [myAlert show];
+    }
+    
 }
 
-- (void)loadOthers:(SearchSelected)selected
+// Dismiss email composer UI on cancel / send
+- (void)mailComposeController:(MFMailComposeViewController*)controller didFinishWithResult:(MFMailComposeResult)result error:(NSError*)error
 {
-    NSString *GACategory = @"";
-    NSString *GAAction = @"";
+    switch (result)
+    {
+        case MFMailComposeResultCancelled:
+            NSLog(@"Mail cancelled");
+            break;
+        case MFMailComposeResultSaved:
+            NSLog(@"Mail saved");
+            break;
+        case MFMailComposeResultSent:
+        {
+            // XGoogle Analytics
+            NSMutableDictionary *event =
+            [[GAIDictionaryBuilder createEventWithCategory:@"Find Club"
+                                                    action:@"F_Clubs"
+                                                     label:@"Club_Share_Info"
+                                                     value:nil] build];
+            [[GAI sharedInstance].defaultTracker send:event];
+            [[GAI sharedInstance] dispatch];
+            
+            NSLog(@"Mail sent");
+            break;
+        }
+        case MFMailComposeResultFailed:
+            NSLog(@"Mail sent failure: %@", [error localizedDescription]);
+            break;
+        default:
+            break;
+    }
+    
+    [self becomeFirstResponder];
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (IBAction)addToContacts:(id)sender
+{
+    // make sure we have access
+    switch (ABAddressBookGetAuthorizationStatus())
+    {
+        // we have access
+        case  kABAuthorizationStatusAuthorized:
+            [self accessGrantedForAddressBook];
+            break;
+            
+        // make a request
+        case  kABAuthorizationStatusNotDetermined :
+            [self requestAddressBookAccess];
+            break;
+        
+        // no access, let the user know
+        case  kABAuthorizationStatusDenied:
+        case  kABAuthorizationStatusRestricted:
+        {
+            UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Privacy Warning"
+                                                            message:@"Permission was not granted for Contacts."
+                                                           delegate:nil
+                                                  cancelButtonTitle:@"OK"
+                                                  otherButtonTitles:nil];
+            [alert show];
+        }
+        break;
+        
+        default:
+            break;
+    }
+}
+
+- (void)newPersonViewController:(ABNewPersonViewController *)newPersonView didCompleteWithNewPerson:(ABRecordRef)person
+{
+    // XGoogle Analytics
+    NSMutableDictionary *event =
+    [[GAIDictionaryBuilder createEventWithCategory:@"Find Club"
+                                            action:@"F_Clubs"
+                                             label:@"Club_AddContact"
+                                             value:nil] build];
+    [[GAI sharedInstance].defaultTracker send:event];
+    [[GAI sharedInstance] dispatch];
+    
+    [self.navigationController dismissViewControllerAnimated:YES completion:nil];
+}
+
+// Prompt the user for access to their Address Book data
+-(void)requestAddressBookAccess
+{
+    ABAddressBookRequestAccessWithCompletion(_addressBook, ^(bool granted, CFErrorRef error)
+    {
+        if (granted)
+        {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self accessGrantedForAddressBook];
+                
+            });
+        }
+    });
+}
+
+// This method is called when the user has granted access to their address book data.
+-(void)accessGrantedForAddressBook
+{
+    CFErrorRef error = NULL;
+    ABRecordRef person = ABPersonCreate();
+    
+    if (_addressBook == nil)
+        _addressBook = ABAddressBookCreateWithOptions(Nil, &error);
+    
+    // add an image
+    NSData *dataRef = nil;
+    NSString *brandName = @"";
+    if ([[[GlobalMethods sharedGlobalMethods]getCurrentBrand] isEqualToString:@"CSC"])
+    {
+        //dataRef = UIImagePNGRepresentation([UIImage imageNamed:@"swishLogo.png"]);
+        brandName = @"City Sports Club";
+    }
+    else
+    {
+        dataRef = UIImagePNGRepresentation([UIImage imageNamed:@"lafSwoosh.png"]);
+        brandName = @"LA Fitness";
+    }
+    
+    ABPersonSetImageData(person, (__bridge CFDataRef)dataRef, nil);
+    
+    // club name and brand
+    ABRecordSetValue(person, kABPersonFirstNameProperty, (__bridge CFTypeRef)(self.clubInfo.desc), &error);
+    ABRecordSetValue(person, kABPersonOrganizationProperty, (__bridge CFTypeRef)(brandName), &error);
+    
+    // address
+    ABMutableMultiValueRef multiAddress = ABMultiValueCreateMutable(kABMultiDictionaryPropertyType);
+    NSMutableDictionary *addressDictionary = [[NSMutableDictionary alloc] init];
+    
+    [addressDictionary setObject:self.clubInfo.address forKey:(NSString *)kABPersonAddressStreetKey];
+    [addressDictionary setObject:self.clubInfo.city forKey:(NSString *)kABPersonAddressCityKey];
+    [addressDictionary setObject:self.clubInfo.state forKey:(NSString *)kABPersonAddressStateKey];
+    [addressDictionary setObject:self.clubInfo.zipCode forKey:(NSString *)kABPersonAddressZIPKey];
+    
+    ABMultiValueAddValueAndLabel(multiAddress, (__bridge CFTypeRef)(addressDictionary), (CFStringRef)@"Address", NULL);
+    ABRecordSetValue(person, kABPersonAddressProperty, multiAddress,&error);
+    CFRelease(multiAddress);
+    
+    // phone
+    ABMutableMultiValueRef multiPhone = ABMultiValueCreateMutable(kABMultiStringPropertyType);
+    ABMultiValueAddValueAndLabel(multiPhone, (__bridge CFTypeRef)(self.clubInfo.phone), kABPersonPhoneMobileLabel, NULL);
+    ABRecordSetValue(person, kABPersonPhoneProperty, multiPhone,nil);
+    CFRelease(multiPhone);
+    
+    ABAddressBookAddRecord(_addressBook, person, &error);
+    
+    // show the new contact
+    ABNewPersonViewController *controller = [[ABNewPersonViewController alloc] init];
+    controller.newPersonViewDelegate = self;
+    [controller setTitle:@" "];     // using logo for title background
+    
+    controller.displayedPerson = person;
+    
+    UINavigationController *newNavigationController = [[UINavigationController alloc] initWithRootViewController:controller];
+    
+    [[newNavigationController navigationBar] setTintColor:[UIColor whiteColor]];
+    [self presentViewController:newNavigationController animated:YES completion:nil];
+    
+    CFRelease(person);
+}
+
+- (void)loadClassesBySort
+{
     NSString *GALabel = @"";
     
-    switch (selected)
+    if (self.sortType == kSortClassName)
     {
-        case kClubs:
+        GALabel = @"Club_ClassbyName";
+        self.listArray = [NSArray arrayWithArray:[[Database sharedInstance] classNamesForClubID:self.clubInfo.clubID]];
+    }
+    else
+    {
+        GALabel = @"Club_ClassbyTime";
+        self.listArray = [NSArray arrayWithArray:[[Database sharedInstance] classInfoForClubID:self.clubInfo.clubID]];
+        
+        // create keys for section and rows
+        for (int index = 0; index < [[[Utils sharedInstance] daysArray] count]; index++)
         {
-            GACategory = @"Find Club";
-            GAAction = @"F_Clubs";
-            GALabel = ([self.locationTextField.text length] > 0) ? @"F_Club_NOGPS" : @"F_Club_GPS";
+            NSMutableArray *currentArray = [[NSMutableArray alloc] init];
             
-            self.sectionHeader = @"Clubs";
-            break;
-        }
-            
-        case kClasses:
-        {
-            GACategory = @"Find Class";
-            GAAction = @"F_Classes";
-            GALabel = ([self.locationTextField.text length] > 0) ? @"F_Classes_NOGPS" : @"F_Classes_GPS";
-            
-            self.listArray = [NSMutableArray arrayWithArray:[self.database classNamesForClubID:kALLCLUBS]];
-            self.sectionHeader = @"Classes";
-            break;
-        }
-            
-        case kAmenities:
-        {
-            GACategory = @"Amenities";
-            GAAction = @"Amenities";
-            GALabel = ([self.locationTextField.text length] > 0) ? @"S_Amenities_NOGPS" : @"S_Amenities_GPS";
-            
-            self.listArray = [NSMutableArray arrayWithArray:[self.database amenitiesForClubID:kALLCLUBS]];
-            self.sectionHeader = @"Amenities";
-            break;
-        }
-            
-        case kLeagues:
-        {
-            GACategory = @"Leagues";
-            GAAction = @"Leagues";
-            GALabel = ([self.locationTextField.text length] > 0) ? @"S_Leagues_NOGPS" : @"S_Leagues_GPS";
-            
-            self.listArray = [NSMutableArray arrayWithArray:[self.database leaguesForClubID:kALLCLUBS]];
-            self.sectionHeader = @"Leagues";
-            
-            if ([self.listArray count] == 0)
+            for (ClassesInfo *info in self.listArray)
             {
-                [self.listTable reloadData];
-                self.hasLeagues = NO;
-                [self showAlert:0];
+                if (index == info.dayID)
+                {
+                    [currentArray addObject:info];
+                }
             }
-            else
-                self.hasLeagues = YES;
-
-            break;
+            
+            // add to our dictionary
+            if ([currentArray count] > 0)
+            {
+                // sort the array before adding to dict
+                NSString *sortString = @"startTime";
+                NSSortDescriptor *sortDescriptor = [[NSSortDescriptor alloc] initWithKey:sortString ascending:YES];
+                NSArray *sortedArray = [currentArray sortedArrayUsingDescriptors:[NSArray arrayWithObject:sortDescriptor]];
+                [self.sections setObject:sortedArray forKey:[[[Utils sharedInstance] daysArray] objectAtIndex:index]];
+            }
         }
     }
     
     // XGoogle Analytics
     NSMutableDictionary *event =
-    [[GAIDictionaryBuilder createEventWithCategory:GACategory
-                                            action:GAAction
+    [[GAIDictionaryBuilder createEventWithCategory:@"Find Club"
+                                            action:@"F_Clubs"
                                              label:GALabel
                                              value:nil] build];
     [[GAI sharedInstance].defaultTracker send:event];
     [[GAI sharedInstance] dispatch];
+    
+    [self.listTable reloadData];
 }
 
-- (void)loadForCurrentLocation
+- (IBAction)addToFavorites:(id)sender
 {
-    self.searchLat = [[[NSUserDefaults standardUserDefaults] objectForKey:@"currentLat"] floatValue];
-    self.searchLon = [[[NSUserDefaults standardUserDefaults] objectForKey:@"currentLon"] floatValue];
-    self.listArray = [NSMutableArray arrayWithArray:[self.database filteredClubs]];
+    NSNumber *nbr = [NSNumber numberWithInteger:self.clubInfo.clubID];
     
-    if ([self.listArray count])
+    if (self.isFavoriteClub)
     {
-        ClubInfo *info = [self.listArray objectAtIndex:0];
-        self.lastZipCode = info.zipCode;
-    }
-}
-
-- (void)loadForLastLocation
-{
-    self.listArray = [NSMutableArray arrayWithArray:[self.database selectClubsWithinDistanceFromZipcode:self.lastZipCode]];
-}
-
-
-- (NSInteger)sportNameIndexForLeague:(NSString*)sport
-{
-    NSInteger index = 0;
-    if ([sport isEqualToString:@"BB"])
-    {
-        index = 0;
-    }
-    else if ([sport isEqualToString:@"RB"])
-    {
-        index = 1;
-    }
-    else if ([sport isEqualToString:@"SQ"])
-    {
-        index = 2;
-    }
-    else if ([sport isEqualToString:@"VB"])
-    {
-        index = 3;
-    }
-    
-    return index;
-}
-
-- (void)showAlert:(NSInteger)tag
-{
-    NSString *message = @"";
-    NSString *message2 = @"";
-    
-    if (tag == 0)
-    {
-        message = @"No leagues found within 50 miles.\nCheck your spelling or change\nyour search location above";
-    }
-    else if (tag == 1)
-    {
-        message = @"No Clubs Found for Search";
-    }
-    else if (tag == 2)
-    {
-        message = @"No Network Connectivity";
-        message2 = @"Your device is not connected to a network. Please check your settings and try again.";
-        self.locationTextField.text = @"";
-        self.locationTextField.placeholder = self.lastZipCode;
-    }
-    else if (tag == 3)
-    {
-        message = @"Zip Code Not Found";
-        message2 = @"Please try your search again";
-        self.locationTextField.text = @"";
-        self.locationTextField.placeholder = self.lastZipCode;
-    }
-    
-    UIAlertView *alert = [[UIAlertView alloc]
-                          initWithTitle:message
-                          message:message2
-                          delegate:self
-                          cancelButtonTitle:@"Continue"
-                          otherButtonTitles:nil, nil];
-    [alert show];
-}
-
-- (IBAction)mapAction:(id)sender
-{
-    // show club location
-    CATransition* transition = [CATransition animation];
-    transition.duration = 0.6;
-    transition.type = kCATransitionReveal;
-    transition.subtype = kCATransitionFromBottom;
-    [self.navigationController.view.layer addAnimation:transition forKey:kCATransition];
-    
-    MapViewController *mapView = [[MapViewController alloc] initWithNibName:@"MapViewController" bundle:nil];
-    mapView.allLocations = [[NSArray alloc] initWithArray:[self.database filteredClubsByLat:self.searchLat andLon:self.searchLon]];
-    mapView.searchLat = self.searchLat;
-    mapView.searchLon = self.searchLon;
-    
-    [self.navigationController pushViewController:mapView animated:NO];
-}
-
-- (IBAction)GPSAction:(id)sender
-{
-    self.locationTextField.text = @"";
-    
-    if ([[ReachabilityManager sharedManager] isReachable])
-    {
-        self.locationTextField.placeholder = @"Zip Code";
-        [self loadForCurrentLocation];
-        [self loadOthers:self.tabIndex];
-        if ([self.listArray count])
-        {
-            [self.listTable reloadData];
-            if ([self.listArray count])
-            {
-                [self.listTable scrollToRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:0]
-                                      atScrollPosition:UITableViewScrollPositionTop animated:YES];
-            }
-        }
+        self.isFavoriteClub = NO;
+        [self.favoriteClubs removeObject:nbr];
     }
     else
     {
-        self.locationTextField.placeholder = self.lastZipCode;
-        [self showAlert:2];
-    }
-}
-
-// connected in IB valueDidChange
-- (IBAction)showAutoCompleteTable:(id)sender
-{
-    [self resetAutoCompleteTable];
-    UITextField *textField = (UITextField*)sender;
-    
-    if ([textField.text length] == 0)
-    {
-        // in case the user backspaces all the way back
-        [self.locationTextField performSelector:@selector(resignFirstResponder) withObject:nil afterDelay:0.01];
-    }
-    else
-    {
-        // use for cities only
-        if (![self isNumeric:textField.text])
-        {
-            [self.autoCompleteArray removeAllObjects];
-            
-            [self.allCities enumerateObjectsUsingBlock:^(id obj, NSUInteger idx, BOOL *stop)
-             {
-                 PostalInfo *info = (PostalInfo*)obj;
-                 NSString *searchLower = [textField.text lowercaseString];
-                 NSString *cityLower = [info.city lowercaseString];
-                 
-                 // look for textbox chars in any position
-                 NSRange range = [cityLower rangeOfString:searchLower options:NSCaseInsensitiveSearch];
-                 
-                 if (range.location != NSNotFound)
-                 {
-                     NSDictionary *dict = @{@"city" : info.city,
-                                            @"index" : [NSString stringWithFormat:@"%i", idx] };
-                     if (![self.autoCompleteArray containsObject:dict])
-                     {
-                         [self.autoCompleteArray addObject:dict];
-                     }
-                 }
-             }];
-            
-            // resize the table if there's less than 10 rows
-            if ([self.autoCompleteArray count] > 0 && [self.autoCompleteArray count] < 10)
-            {
-                float height = ((20 * [self.autoCompleteArray count]) + 10);
-                self.autoCompleteTable.frame = CGRectMake(92, 39, 218, height);
-            }
-            
-            if ([self.autoCompleteArray count] > 0)
-            {
-                [self.autoCompleteTable setHidden:NO];
-                [self.autoCompleteTable reloadData];
-            }
-        }
-    }
-    
-    [self.locationTextField setClearButtonMode:UITextFieldViewModeAlways];
-}
-
-- (void)resetAutoCompleteTable
-{
-    // reset the table
-    self.autoCompleteTable.hidden = YES;
-    self.autoCompleteTable.frame = CGRectMake(92, 39, 218, 120);
-}
-
-- (BOOL)isNumeric:(NSString*)substring
-{
-    NSScanner *scanner = [NSScanner scannerWithString:substring];
-    return [scanner scanInteger:NULL] && [scanner isAtEnd];
-}
-
-
-
-#pragma mark - UITextField delegate
-
-- (void)textFieldDidBeginEditing:(UITextField *)textField
-{
-    self.autoCompleteTable.frame = CGRectMake(92, 39, 218, 120);
-}
-
-- (BOOL)textFieldShouldReturn:(UITextField *)textField
-{
-    // dismiss the keyboard - need delay to make it work here
-    [self.locationTextField performSelector:@selector(resignFirstResponder) withObject:nil afterDelay:0.01];
-    [self.locationTextField setClearButtonMode:UITextFieldViewModeAlways];
-    
-    if (self.tabIndex == 3 && self.hasLeagues == NO)
-    {
-        [self showAlert:0];
-        self.locationTextField.text = @"";
-        return YES;
-    }
-
-    // make sure we have something before reloading
-    if ([self.locationTextField.text length] > 0)
-    {
-        if ([self isNumeric:self.locationTextField.text])
-        {
-            [self loadListTableByZip:self.tabIndex];
-        }
-        else
-        {
-            // all other searches, including Canada
-            self.locationTextField.text = [self.locationTextField.text uppercaseString];
-            [self loadListTableByCity:self.tabIndex];
-        }
+        self.isFavoriteClub = YES;
+        [self.favoriteClubs addObject:nbr];
         
-        if ([self.autoCompleteArray count] > 0)
-            [self resetAutoCompleteTable];
+        // XGoogle Analytics
+        NSMutableDictionary *event =
+        [[GAIDictionaryBuilder createEventWithCategory:@"Find Club"
+                                                action:@"F_Clubs"
+                                                 label:@"AddToFavClub"
+                                                 value:nil] build];
+        [[GAI sharedInstance].defaultTracker send:event];
+        [[GAI sharedInstance] dispatch];
     }
     
-    return YES;
+    [self.listTable reloadData];
 }
 
-- (BOOL)textFieldShouldClear:(UITextField *)textField
+
+// load table cells faster and more efficiently
+- (void)registerNibs
 {
-    // dismiss the keyboard - need delay to make it work here
-    [self.locationTextField performSelector:@selector(resignFirstResponder) withObject:nil afterDelay:0.01];
+    UINib *searchCellNib = [UINib nibWithNibName:REUSE_SEARCH_DETAIL_ID bundle:[NSBundle bundleForClass:[SearchCell class]]];
+    [self.listTable registerNib:searchCellNib forCellReuseIdentifier:REUSE_SEARCH_DETAIL_ID];
     
-    // reset the searchBox
-    if ([self.locationTextField.text length] > 0)
+    UINib *buttonCellNib = [UINib nibWithNibName:REUSE_SHOW_BUTTONS_ID bundle:[NSBundle bundleForClass:[ShowButtonsCell class]]];
+    [self.listTable registerNib:buttonCellNib forCellReuseIdentifier:REUSE_SHOW_BUTTONS_ID];
+    
+    UINib *labelCellNib = [UINib nibWithNibName:REUSE_SHOW_LABEL_ID bundle:[NSBundle bundleForClass:[ShowLabelCell class]]];
+    [self.listTable registerNib:labelCellNib forCellReuseIdentifier:REUSE_SHOW_LABEL_ID];
+}
+
+- (IBAction)goBack:(id)sender
+{
+    [self.navigationController popViewControllerAnimated:YES];
+}
+
+- (IBAction)sortByAction:(id)sender
+{
+    UIButton *button = (UIButton*)sender;
+    
+    // toggle the labels
+    if (button.tag == kSortClassName)
     {
-        [self resetAutoCompleteTable];
-        [self.locationTextField setText:@""];
+        self.sortType = kSortClassName;
+        [self.sortByClassLabel setBackgroundColor:[UIColor darkGrayColor]];
+        [self.sortByTimeLabel setBackgroundColor:[UIColor lightGrayColor]];
+    }
+    else
+    {
+        self.sortType = kSortClassTime;
+        [self.sortByClassLabel setBackgroundColor:[UIColor lightGrayColor]];
+        [self.sortByTimeLabel setBackgroundColor:[UIColor darkGrayColor]];
     }
     
-    return YES;
+    [self loadClassesBySort];
 }
 
 
 #pragma mark Tab Bar Delegate
 
+
 - (void)tabBar:(UITabBar *)tabBar didSelectItem:(UITabBarItem *)item
 {
-    self.tabIndex = [item tag];
+    self.displayType = [item tag];
+    self.listTable.frame = CGRectMake(0, 90, 320, self.listTableHeight);
+    NSString *GALabel = @"";
     
-    if ([self isNumeric:self.lastZipCode])
-        [self loadListTableByZip:self.tabIndex];
-    else
-        [self loadListTableByCity:self.tabIndex];
+    switch (self.displayType)
+    {
+        case kClubDetails:
+            GALabel = @"Club_Details";
+            self.listTable.frame = CGRectMake(0, 0, 320, self.listTableHeightForDetails);
+            break;
+            
+        case kClubHours:
+            GALabel = @"Club_Hours";
+            self.listArray = [NSArray arrayWithArray:[[Database sharedInstance] clubHoursForClubID:self.clubInfo.clubID]];
+            self.messageLabel.text = @"Holidays May Vary";
+            self.sortButtonsContainer.hidden = YES;
+            break;
+            
+        case kClubClasses:
+            self.messageLabel.text = @"Schedule subject to change";
+            [self loadClassesBySort];
+            self.sortButtonsContainer.hidden = NO;
+            break;
+            
+        default:
+            break;
+    }
+    
+    // XGoogle Analytics
+    if ([GALabel length] > 0)
+    {
+        NSMutableDictionary *event =
+        [[GAIDictionaryBuilder createEventWithCategory:@"Find Club"
+                                                action:@"F_Clubs"
+                                                 label:GALabel
+                                                 value:nil] build];
+        [[GAI sharedInstance].defaultTracker send:event];
+        [[GAI sharedInstance] dispatch];
+    }
+    
+    [self.listTable reloadData];
+    [self.listTable scrollToRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:0]
+                          atScrollPosition:UITableViewScrollPositionTop animated:YES];
 }
+
 
 #pragma mark Table Data Source and Delegate Methods
 
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView
 {
+    if (self.displayType == kClubClasses && self.sortType == kSortClassTime)
+    {
+        NSInteger sectionCount = [[self.sections allKeys] count];
+        return sectionCount;
+    }
+    
     return 1;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section
 {
-    if (tableView == self.listTable)
-        return [self.listArray count];
-    else
-        return [self.autoCompleteArray count];
+    // only setup for special cases, otherwise everyone will just have one.
+    if (self.displayType == kClubDetails)
+    {
+        return 6;
+    }
+    else if (self.displayType == kClubHours)
+    {
+        return 7;       // days of the week
+    }
+    else if (self.displayType == kClubClasses)
+    {
+        if (self.sortType == kSortClassName)
+        {
+            return [self.listArray count];
+        }
+        else
+        {
+            NSArray *array = [[NSArray alloc] initWithArray:[self.sections objectForKey:[[[Utils sharedInstance] daysArray] objectAtIndex:section]]];
+            NSInteger rowCount = [array count];
+            return rowCount;
+        }
+    }
+    
+    return 1;
 }
 
-- (UITableViewCell*)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath
 {
-    if (tableView == self.listTable)
+    if (self.displayType == kClubDetails)
     {
-        UITableViewCell *cell = [self.listTable dequeueReusableCellWithIdentifier:[self reuseSearchIDForRowAtIndexPath:indexPath]];
-        if (cell == nil)
+        if (indexPath.row == 0)
         {
-            cell.textLabel.textColor = [UIColor blackColor];
-            cell.textLabel.numberOfLines = 1;
-            cell.textLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+            UITableViewCell *cell = [self.listTable dequeueReusableCellWithIdentifier:[self reuseButtonIDForRowAtIndexPath:indexPath]];
+            [self configureButtonCell:(ShowButtonsCell*)cell forRowAtIndexPath:indexPath];
+            return cell;
         }
+        else if (indexPath.row >= 4)
+        {
+            UITableViewCell *cell = [self.listTable dequeueReusableCellWithIdentifier:[self reuseLabelIDForRowAtIndexPath:indexPath]];
+            [self configureLabelCell:(ShowLabelCell*)cell forRowAtIndexPath:indexPath];
+            return cell;
+        }
+    }
+    
+    // all others
+    UITableViewCell *cell = [self.listTable dequeueReusableCellWithIdentifier:[self reuseSearchIDForRowAtIndexPath:indexPath]];
+    [self configureSearchCell:(SearchCell*)cell forRowAtIndexPath:indexPath];
+    return cell;
+}
+
+- (void)configureSearchCell:(SearchCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath
+{
+    // set default
+    cell.contentView.backgroundColor = [UIColor whiteColor];
+    [cell setSelectionStyle:UITableViewCellSelectionStyleNone];
+    [cell setAccessoryType:UITableViewCellAccessoryNone];
+    cell.title.hidden = NO;
+    cell.subtitle.hidden = NO;
+    cell.miscLabel.hidden = YES;
+    cell.imageView.hidden = YES;
+    [cell.title setFont:[UIFont systemFontOfSize:SearchCell_Title_FontSize]];
+    
+    if (self.displayType == kClubDetails)
+    {
+        [cell setAccessoryType:UITableViewCellAccessoryDisclosureIndicator];
+    
+        [cell.imageView setHidden:NO];
         
-        [self configureSearchCell:(SearchCell*)cell forRowAtIndexPath:indexPath];
-        return cell;
+        if (indexPath.row == 1)
+        {
+            cell.title.text = self.clubInfo.address;
+            cell.subtitle.text = [NSString stringWithFormat:@"%@, %@ %@", self.clubInfo.city, self.clubInfo.state, self.clubInfo.zipCode];
+            [cell.imageView setImage:[UIImage imageNamed:@"LocatorIcon.png"]];
+            [cell.title setFrame:CGRectMake(51, 4, 200, 20)];
+            [cell.subtitle setFrame:CGRectMake(51, 28, 200, 20)];
+        }
+        if (indexPath.row == 2)
+        {
+            cell.title.text = self.clubInfo.phone;
+            cell.subtitle.hidden = YES;
+            [cell.imageView setImage:[UIImage imageNamed:@"PhoneIcon.png"]];
+            [cell.title setFrame:CGRectMake(51, 15, 200, 20)];
+        }
+        if (indexPath.row == 3)
+        {
+            cell.title.text = @"Email Address Info";
+            cell.subtitle.hidden = YES;
+            [cell.imageView setImage:[UIImage imageNamed:@"EmailScheduleIcon.png"]];
+            [cell.title setFrame:CGRectMake(51, 15, 200, 20)];
+        }
+    }
+    else if (self.displayType == kClubHours)
+    {
+        [cell.title setFont:[UIFont boldSystemFontOfSize:SearchCell_Title_FontSize]];
+        cell.title.text = [[[[Utils sharedInstance] daysArray] objectAtIndex:indexPath.row] substringToIndex:3];        // abbreviate days of the week
+        cell.subtitle.text = [self formatClubHours:indexPath.row];
+        cell.miscLabel.text = [self formatKidsKlubHours:indexPath.row];
+        cell.miscLabel.hidden = NO;
+        [cell.title setFrame:CGRectMake(15, 14, 65, 21)];
+        [cell.subtitle setFrame:CGRectMake(80, 14, 125, 21)];
+        [cell.miscLabel setFrame:CGRectMake(205, 5, 107, 40)];
+        
+        if (indexPath.row == [FormatDate dayOfTheWeek])
+        {
+            // highlight this row
+            cell.contentView.backgroundColor = [UIColor colorWithRed:.95 green:.54 blue:0 alpha:0.2];
+        }
+    }
+    else if (self.displayType == kClubClasses)
+    {
+        [cell setAccessoryType:UITableViewCellAccessoryDisclosureIndicator];
+        
+        if (self.sortType == kSortClassName)
+        {
+            cell.subtitle.hidden = YES;
+            NSDictionary *info = [self.listArray objectAtIndex:indexPath.row];
+            
+            cell.title.text = [info valueForKey:@"name"];
+            [cell.title setFrame:CGRectMake(10, 15, 200, 20)];
+        }
+        if (self.sortType == kSortClassTime)
+        {
+            NSArray *array = [[NSArray alloc] initWithArray:[self.sections objectForKey:[[[Utils sharedInstance] daysArray] objectAtIndex:indexPath.section]]];
+            ClassesInfo *info = [array objectAtIndex:indexPath.row];
+            
+            [cell.title setFont:[UIFont boldSystemFontOfSize:SearchCell_Title_FontSize]];
+            cell.title.text = [FormatDate formatTime:info.startTime];
+            cell.subtitle.text = info.name;
+            [cell.title setFrame:CGRectMake(10, 10, 65, 30)];
+            [cell.subtitle setFrame:CGRectMake(80, 10, 200, 30)];
+        }
+    }
+}
+
+- (void)configureButtonCell:(ShowButtonsCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath
+{
+    [cell setSelectionStyle:UITableViewCellSelectionStyleNone];
+    
+    [cell.cellButton1 setImage:[UIImage imageNamed:@"AddPlusIcon.png"] forState:UIControlStateNormal];
+    [cell.cellTitle1 setText:@"Add to Contacts"];
+    [cell.cellTitle1 setNumberOfLines:3];
+    [cell.cellTitle2 setNumberOfLines:3];
+    [cell.cellButton1 addTarget:self
+                         action:@selector(addToContacts:)
+               forControlEvents:UIControlEventTouchUpInside];
+    
+
+    BOOL isUserLoggedIn = [[GlobalMethods sharedGlobalMethods] isUserLoggedIn];
+    if (isUserLoggedIn)
+    {
+        cell.cellButton2.hidden = NO;
+        cell.cellTitle2.hidden = NO;
+        cell.cellBtnFreePass.hidden = YES;
+        cell.cellTitleFreePass.hidden = YES;
+        
+        [cell.cellTitle1 setFrame:CGRectMake(42, 45, 100, 34)];
+        [cell.cellTitle2 setFrame:CGRectMake(172, 45, 120, 34)];
+        [cell.cellButton1 setFrame:CGRectMake(72, 7, 40, 40)];
+        [cell.cellButton2 setFrame:CGRectMake(212, 7, 40, 40)];
+        
+        [cell.cellButton2 addTarget:self
+                             action:@selector(addToFavorites:)
+                   forControlEvents:UIControlEventTouchUpInside];
+        
+        if (self.isFavoriteClub)
+        {
+            [cell.cellButton2 setImage:[UIImage imageNamed:@"favorite.png"] forState:UIControlStateNormal];
+            [cell.cellTitle2 setText:@"Remove Favorite"];
+        }
+        else
+        {
+            [cell.cellButton2 setImage:[UIImage imageNamed:@"AddFavoriteIcon.png"] forState:UIControlStateNormal];
+            [cell.cellTitle2 setText:@"Add Club to Favorites"];
+        }
     }
     else
     {
-        static NSString *CellIdentifier = @"Cell";
+        // only allow classDetails
+        cell.cellButton2.hidden = YES;
+        cell.cellTitle2.hidden = YES;
+        cell.cellTitleFreePass.hidden = NO;
+        cell.cellTitleFreePass.hidden = NO;
+        [cell.cellBtnFreePass addTarget:self
+                             action:@selector(addGuestPass:)
+                   forControlEvents:UIControlEventTouchUpInside];
         
-        UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:CellIdentifier];
-        if (cell == nil)
+        //[cell.cellTitle1 setFrame:CGRectMake(107, 45, 100, 34)];
+       // [cell.cellButton1 setFrame:CGRectMake(136, 7, 40, 40)];
+        
+        [cell.cellTitleFreePass setFrame:CGRectMake(42, 45, 100, 34)];
+        [cell.cellTitle1 setFrame:CGRectMake(192, 45, 80, 34)];
+        [cell.cellBtnFreePass setFrame:CGRectMake(72, 7, 40, 40)];
+        [cell.cellButton1 setFrame:CGRectMake(212, 7, 40, 40)];
+    }
+}
+- (IBAction)addGuestPass:(id)sender
+{
+    FreePassViewController *freePassView = [[FreePassViewController alloc] initWithNibName:@"FreePassViewController" bundle:nil];
+    freePassView.clubID = self.clubInfo.clubID;
+    freePassView.isVIP_GuestPass = 0;
+    [self.navigationController pushViewController:freePassView animated:YES];
+}
+
+
+- (void)configureLabelCell:(ShowLabelCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath
+{
+    [cell setSelectionStyle:UITableViewCellSelectionStyleNone];
+    [cell.cellLabel setFont:[UIFont systemFontOfSize:13]];
+    [cell.cellLabel setNumberOfLines:10];
+    float labelWidth = 260;     // make it the same for everyone
+    
+    if (self.displayType == kClubDetails)
+    {
+        NSString *listStr = @"";
+        if (indexPath.row == 4)
         {
-            cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:CellIdentifier];
+            listStr = [self amenitiesStr];
+            [cell.cellImageView setImage:[UIImage imageNamed:@"WaterBottleIcon.png"]];
         }
+        if (indexPath.row == 5)
+        {
+            listStr = [self leaguesStr];
+            [cell.cellImageView setImage:[UIImage imageNamed:@"BasketballIcon.png"]];
+        }
+        cell.cellLabel.text = listStr;
         
-        NSDictionary *info = [self.autoCompleteArray objectAtIndex:indexPath.row];
-        NSInteger index = [[info valueForKey:@"index"] integerValue];
-        self.currentPostInfo = [self.allCities objectAtIndex:index];
-        [cell.textLabel setText:[NSString stringWithFormat:@"%@, %@ %@",
-                                 self.currentPostInfo.city, self.currentPostInfo.state, self.currentPostInfo.zipCode]];
-        [cell.textLabel setFont:[UIFont systemFontOfSize:11]];
-        return cell;
+        CGSize size = [[Utils sharedInstance] stringSizeForLabelCell:listStr];
+        [cell.cellLabel setFrame:CGRectMake(40, 5, labelWidth, size.height+30)];
+        [cell.cellLabel setTextAlignment:NSTextAlignmentLeft];
     }
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath
 {
-    if (tableView == self.listTable)
+    if (self.displayType == kClubDetails)
     {
-        if (self.tabIndex == kClubs)
+        if (indexPath.row == 1)
         {
+            // show club location
+            CATransition* transition = [CATransition animation];
+            transition.duration = 0.5;
+            transition.type = kCATransitionReveal;
+            transition.subtype = kCATransitionFromRight;
+            [self.navigationController.view.layer addAnimation:transition forKey:kCATransition];
+            
+            MapViewController *mapView = [[MapViewController alloc] initWithNibName:@"MapViewController" bundle:nil];
+            mapView.allLocations = [[NSArray alloc] initWithObjects:self.clubInfo, nil];
+            mapView.searchLat = self.clubInfo.lat;
+            mapView.searchLon = self.clubInfo.lon;
+            
             // XGoogle Analytics
             NSMutableDictionary *event =
             [[GAIDictionaryBuilder createEventWithCategory:@"Find Club"
                                                     action:@"F_Clubs"
-                                                     label:@"F_Club_SpecificClub"
+                                                     label:@"Club_Map"
                                                      value:nil] build];
             [[GAI sharedInstance].defaultTracker send:event];
             [[GAI sharedInstance] dispatch];
             
-            ClubInfo *info = [self.listArray objectAtIndex:indexPath.row];
-            SearchDetailViewController *detailView = [[SearchDetailViewController alloc] initWithNibName:@"SearchDetailViewController" bundle:nil];
-            detailView.clubInfo = info;
-            detailView.listSelected = kClubs;
-            detailView.headerText = info.desc;
-            [self.navigationController pushViewController:detailView animated:YES];
+            [self.navigationController pushViewController:mapView animated:NO];
         }
-        else
+        else if (indexPath.row == 2)
         {
-            SearchCell *selectedCell = (SearchCell*)[tableView cellForRowAtIndexPath:indexPath];
-            
-            ClubListViewController *clubList = [[ClubListViewController alloc] initWithNibName:@"ClubListViewController" bundle:nil];
-            clubList.listSelected = self.tabIndex;
-            clubList.searchLat = self.searchLat;
-            clubList.searchLon = self.searchLon;
-            clubList.headerText = selectedCell.title.text;
-            
-            // pass the list of clubs
-            if (self.tabIndex == kLeagues)
-            {
-                // XGoogle Analytics
-                NSMutableDictionary *event =
-                [[GAIDictionaryBuilder createEventWithCategory:@"Leagues"
-                                                        action:@"Leagues"
-                                                         label:@"S_LeagueType"
-                                                         value:nil] build];
-                [[GAI sharedInstance].defaultTracker send:event];
-                [[GAI sharedInstance] dispatch];
-                
-                NSString *sportName = [self.listArray objectAtIndex:indexPath.row];
-                clubList.searchID = [self sportNameIndexForLeague:sportName];
-            }
-            else if (self.tabIndex == kAmenities)
-            {
-                // XGoogle Analytics
-                NSMutableDictionary *event =
-                [[GAIDictionaryBuilder createEventWithCategory:@"Amenities"
-                                                        action:@"Amenities"
-                                                         label:@"S_SelectAmenity"
-                                                         value:nil] build];
-                [[GAI sharedInstance].defaultTracker send:event];
-                [[GAI sharedInstance] dispatch];
-                
-                NSDictionary *info = [self.listArray objectAtIndex:indexPath.row];
-                clubList.searchID = [[info valueForKey:@"amenityID"] integerValue];
-            }
-            else
-            {
-                // XGoogle Analytics
-                NSMutableDictionary *event =
-                [[GAIDictionaryBuilder createEventWithCategory:@"Find Class"
-                                                        action:@"F_Classes"
-                                                         label:@"F_Select_Class"
-                                                         value:nil] build];
-                [[GAI sharedInstance].defaultTracker send:event];
-                [[GAI sharedInstance] dispatch];
-                
-                NSDictionary *info = [self.listArray objectAtIndex:indexPath.row];
-                clubList.searchID = [[info valueForKey:@"classID"] integerValue];
-            }
-            
-            [self.navigationController pushViewController:clubList animated:YES];
+            // call the club
+            [self callClub];
+        }
+        else if (indexPath.row == 3)
+        {
+            [self sendEmail];
         }
     }
-    else
+    else if (self.displayType == kClubHours)
     {
-        // this is the auto complete table
-        NSDictionary *info = [self.autoCompleteArray objectAtIndex:indexPath.row];
-        NSInteger index = [[info valueForKey:@"index"] integerValue];
-        self.currentPostInfo = [self.allCities objectAtIndex:index];
-        self.locationTextField.text = [NSString stringWithFormat:@"%@, %@ %@",
-                                       self.currentPostInfo.city, self.currentPostInfo.state, self.currentPostInfo.zipCode];
-        [self resetAutoCompleteTable];
+        // nothing to do here
+        
+    }
+    else if (self.displayType == kClubClasses)
+    {
+        NSString *className = @"";
+        NSInteger classID = 0;
+        
+        if (self.sortType == kSortClassName)
+        {
+            NSDictionary *info = [self.listArray objectAtIndex:indexPath.row];
+            className = [info valueForKey:@"name"];
+            classID = [[info valueForKey:@"classID"] integerValue];
+        }
+        if (self.sortType == kSortClassTime)
+        {
+            NSArray *array = [[NSArray alloc] initWithArray:[self.sections objectForKey:[[[Utils sharedInstance] daysArray] objectAtIndex:indexPath.section]]];
+            ClassesInfo *info = [array objectAtIndex:indexPath.row];
+            className = info.name;
+            classID = info.classID;
+        }
+        
+        ClassDetailViewController *classDetail = [[ClassDetailViewController alloc] initWithNibName:@"ClassDetailViewController" bundle:nil];
+        classDetail.clubName = self.headerText;
+        classDetail.className = className;
+        classDetail.classID = classID;
+        classDetail.clubID = self.clubInfo.clubID;
+        
+        [self.navigationController pushViewController:classDetail animated:YES];
     }
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath
 {
-    if (tableView == self.listTable)
+    // only setup for special cases, otherwise everyone will have a height of 50
+    if (self.displayType == kClubDetails)
     {
-        return 50;
+        if (indexPath.row == 0)
+        {
+            if (indexPath.row == 0)
+                return 85.0;
+        }
+        else if (indexPath.row >= 4)
+        {
+            NSString *listStr = @"";
+            if (indexPath.row == 4)
+            {
+                listStr = [self amenitiesStr];
+            }
+            if (indexPath.row == 5)
+            {
+                listStr = [self leaguesStr];
+            }
+            CGSize size = [[Utils sharedInstance] stringSizeForLabelCell:listStr];
+            
+            return size.height + 30;
+        }
     }
-    else
+    else if (self.displayType == kClubHours)
     {
-        // this is the auto complete table
-        return 20;
+        NSString *listStr  = [[Database sharedInstance] holidayStringForClubID:self.clubInfo.clubID];
+        CGSize size = [[Utils sharedInstance] stringSizeForLabelCell:listStr];
+        
+        return size.height + 25;
     }
+    
+    return 50;      // all other cell heights
 }
 
 - (NSString*)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section
 {
-    if (tableView == self.listTable)
+    if (self.displayType == kClubClasses && self.sortType == kSortClassTime)
     {
-        return self.sectionHeader;
+        return [[[Utils sharedInstance] daysArray] objectAtIndex:section];
     }
     
     return nil;
 }
 
-- (void)configureSearchCell:(SearchCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath
+- (NSString *)reuseSearchIDForRowAtIndexPath:(NSIndexPath*)indexPath
 {
-    // reset
-    cell.title.hidden = NO;
-    cell.subtitle.hidden = NO;
-    cell.miscLabel.hidden = NO;
-    cell.imageView.hidden = NO;
+    // return the ID cell
+    return REUSE_SEARCH_DETAIL_ID;
+}
+
+- (NSString *)reuseButtonIDForRowAtIndexPath:(NSIndexPath*)indexPath
+{
+    // return the ID cell
+    return REUSE_SHOW_BUTTONS_ID;
+}
+
+- (NSString *)reuseLabelIDForRowAtIndexPath:(NSIndexPath*)indexPath
+{
+    // return the ID cell
+    return REUSE_SHOW_LABEL_ID;
+}
+
+
+#pragma mark - UIAlertView Delegate
+
+
+- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex
+{
+    NSString *buttonTitle = [alertView buttonTitleAtIndex:buttonIndex];
     
-    // same for all selections
-    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-    //cell.accessoryView  = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"accessory.png"]];
-    cell.selectionStyle = UITableViewCellSelectionStyleNone;
-    
-    [cell.title setFont:[UIFont systemFontOfSize:SearchCell_Title_FontSize]];
-    [cell.title setTextColor:[UIColor blackColor]];
-    [cell.title setFrame:CGRectMake(7, 2, 250, 21)];
-    
-    [cell.subtitle setFont:[UIFont systemFontOfSize:SearchCell_Subtitle_FontSize]];
-    [cell.subtitle setTextColor:[UIColor darkGrayColor]];
-    [cell.subtitle setFrame:CGRectMake(7, 23, 200, 21)];
-    
-    [cell.miscLabel setFont:[UIFont systemFontOfSize:SearchCell_Misc_FontSize]];
-    [cell.miscLabel setTextColor:[UIColor blackColor]];
-    
-    if (self.tabIndex == kClubs)
+    if ([buttonTitle isEqualToString:@"Call"])
     {
-        ClubInfo *info = [self.listArray objectAtIndex:indexPath.row];
+        // XGoogle Analytics
+        NSMutableDictionary *event =
+        [[GAIDictionaryBuilder createEventWithCategory:@"Find Club"
+                                                action:@"F_Clubs"
+                                                 label:@"Club_Call_Club"
+                                                 value:nil] build];
+        [[GAI sharedInstance].defaultTracker send:event];
+        [[GAI sharedInstance] dispatch];
         
-        cell.title.text = info.desc;
-        cell.subtitle.text = info.city;
-        cell.miscLabel.text = [NSString stringWithFormat:@"%i Mi", info.distance];
-        [cell.miscLabel setFrame:CGRectMake(240, 10, 50, 32)];
-        [cell.miscLabel setTextAlignment:NSTextAlignmentRight];
-        cell.imageView.hidden = YES;
-    }
-    else if (self.tabIndex == kClasses)
-    {
-        NSDictionary *info = [self.listArray objectAtIndex:indexPath.row];
-        
-        cell.title.text = [info valueForKey:@"name"];
-        cell.subtitle.hidden = YES;
-        cell.miscLabel.hidden = YES;
-        cell.imageView.hidden = YES;
-        
-        [cell.title setFrame:CGRectMake(7, 10, 200, 25)];
-        
-    }
-    else if (self.tabIndex == kAmenities)
-    {
-        NSDictionary *info = [self.listArray objectAtIndex:indexPath.row];
-        
-        cell.title.text = [info valueForKey:@"desc"];
-        cell.imageView.image = [[Utils sharedInstance] imageForAmenity:[[info valueForKey:@"amenityID"] integerValue]];
-        cell.subtitle.hidden = YES;
-        cell.miscLabel.hidden = YES;
-        
-        [cell.title setFrame:CGRectMake(51, 10, 200, 25)];
-    }
-    else if (self.tabIndex == kLeagues)
-    {
-        // Amenities and Leagues
-        NSString *sportName = [self.listArray objectAtIndex:indexPath.row];
-        
-        cell.title.text = [[Utils sharedInstance] sportNameForLeague:sportName];
-        cell.imageView.image = [[Utils sharedInstance] imageForLeague:sportName];
-        cell.subtitle.hidden = YES;
-        cell.miscLabel.hidden = YES;
-        
-        [cell.title setFrame:CGRectMake(51, 10, 200, 25)];
+        NSString *phoneStr = [NSString stringWithFormat:@"telprompt://1-%@", self.clubInfo.phone];
+        NSURL *url = [NSURL URLWithString:phoneStr];
+        [[UIApplication sharedApplication] openURL:url];
     }
 }
 
-- (NSString *)reuseSearchIDForRowAtIndexPath:(NSIndexPath*)indexPath
-{
-    // return the search ID cell
-    return REUSE_SEARCH_ID;
-}
 
 - (void)didReceiveMemoryWarning
 {
     [super didReceiveMemoryWarning];
     
-    self.database = nil;
-    self.location = nil;
+    self.clubInfo = nil;
     self.listArray = nil;
-    self.allCities = nil;
-    self.autoCompleteArray = nil;
-    self.sectionHeader = nil;
+    self.favoriteClubs = nil;
+    self.favoriteClasses = nil;
+    self.favoritesPath = nil;
+    self.headerText = nil;
+    self.sections = nil;
 }
+
+- (void)dealloc
+{
+    if (_addressBook)
+    {
+        CFRelease(_addressBook);
+    }
+}
+
 
 @end
